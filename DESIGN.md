@@ -1,0 +1,326 @@
+# BrightByte — design (demo of the world mechanics)
+
+A top-down office-floor business sim. You start in a garage with $50k and yourself.
+You open departments, hire, buy assets, raise capital, survive events, and sell the
+company after year 2. The HUD shows Cash, Profit, Free cash flow and Company value,
+and the point of the game is that Profit and Cash flow disagree constantly, for
+reasons the player can see.
+
+This document is the single source of truth for the demo. Everything below was
+decided with the owner (two grilling rounds, 30 questions, all accepted on 2026-11-02).
+
+## 1. Scope of the demo
+
+In: all six departments, people, assets, the three bars + value, valuation with risk
+premia, investor knocks (equity / loan), six events, exit and game over, a Books panel
+with the cash bridge, a hint line, a debug drawer, seeded determinism, local
+leaderboard.
+
+Out: sound, tutorial, save/load, shared leaderboard backend, real art assets,
+localisation, app-store packaging, balance beyond "a five-year run is playable
+without trivially winning or dying".
+
+## 2. Platform, form factor, stack
+
+- Browser. Portrait column (9:16, 420×840 CSS px design size) that scales to fit any
+  viewport and sits centred on desktop. Touch and mouse.
+- TypeScript + Vite + Vitest. Canvas 2D for the office floor, DOM for HUD, panels and
+  cards. No game engine, no framework.
+- The simulation (`src/sim`) is pure, seeded and deterministic. It never imports
+  from `src/ui`. It can run headless (balance harness, tests).
+- Single-file build (`vite-plugin-singlefile`) so the game is one HTML file.
+- English only, single player.
+
+## 3. Art register
+
+Soft stylised 3D look drawn procedurally: pastel department colours, rounded rooms
+with short extruded walls on the back and side edges (steep three-quarter
+"dollhouse" view, screen-aligned rectangles, NOT an isometric diamond grid), soft
+drop shadows, big-headed characters (head ≈ 45% of figure height), glassy HUD pills
+with backdrop blur. Department colours: Product/Engineering blue `#5B8DEF`,
+Sales green `#5FBF7A`, Support orange `#F2A94A`, Marketing purple `#A77BEF`,
+Finance teal `#4FB9C9`, R&D indigo `#6C6FD8`, Reception/lobby pink `#F28CB1`,
+garage warm grey `#C9BFB2`. Floor wood `#E8D7BE`, street `#B8BDC4`, grass `#A9D68B`.
+Buttons: Hire blue, Build amber, Invest green, Sell purple (frame 2 of the concept).
+
+## 4. Clock
+
+- One game month = 30 game days = 30 s at 1×. The sim ticks once per game day.
+- Speeds: pause, 1×, 3×. Investor and event cards pause the clock.
+- Month end ("close"): books close, HUD history snaps, valuation is recomputed.
+- The HUD shows month-to-date figures live. Calendar badge shows Year / Quarter / Month.
+- No hard time limit. Score is taken only when the player presses Sell.
+
+## 5. The building
+
+- Grid of cells, 6 wide × 8 tall per floor. Floor 0 and, after buying the second
+  floor, floor 1 drawn stacked above it with a staircase.
+- Fixed on floor 0: the garage (2×2 at bottom-left, x=0,y=6) and the lobby (2×2 at
+  bottom-centre, x=2,y=6) with the street door on its bottom edge. The lobby appears
+  rent-free when the first room is placed; before that the garage door is the door.
+- Rooms: one department each. Sizes: small 2×2 (max 4 desks, rent $3k/mo), large
+  3×2 (max 6 desks, rent $4.5k/mo). Garage: rent-free, max 2 desks, any role may
+  sit there. Demo room: a 2×2 block placed like a room, capex only, no rent.
+- Placing a room: Build → department → size → tap a free, in-bounds spot. Rent
+  starts at once. Closing a room fires its staff (severance) and sells its desks at
+  60% of book automatically.
+- Geometry is cosmetic. Outcomes come from department capacity, never distance.
+
+## 6. People
+
+- Roles map one-to-one to departments: product (engineer), sales (rep), support
+  (agent), marketing (marketer), finance (finance), rnd (researcher).
+- Archetypes: junior (skill 1–2, cheap, +0.1 skill/month up to 3), mid (2.5–3.5),
+  senior (4–5, expensive), star (5, 10% commission on enterprise deals, asks for
+  raises every 6 months).
+- Quirks (one each): coffee (−15 morale without a coffee machine), crowd (−20 morale
+  when room is at capacity), mentor (juniors in the same room learn 2×), mercenary
+  (poaching target, quits at morale < 35), loyal (never quits), diva (raise ask every
+  6 months instead of 12).
+- Morale 0–100, moves toward a target each day. Target = 70 + desk&laptop (0 / −25)
+  + coffee machine (+10) − crowding (room at capacity: −10) − overload (dept demand >
+  capacity: −15) + recent raise granted (+15 for 3 months) − raise refused (−30 for 6
+  months) ± quirk terms, clamped.
+- Output = skill × (0.5 + morale/200); ×0.5 without a laptop.
+- Raise request every 12 months (+15%); refusing applies the morale penalty. Morale
+  < 20 → 10% chance per month to quit (loyal never). Firing = 3 months' salary now.
+- Hiring needs a free desk in that role's room (or the garage). Candidates: 3 per
+  role, refreshed every month end. Salaries: junior $4k, mid $7k, senior $11k,
+  star $14k per month (±10% noise).
+- The founder is a free generalist (no salary, skill 3) assignable to product or
+  sales. Counted as staff for capacity and for the acqui-hire floor.
+- Laptops are company assets handed out automatically (one per person); spares keep
+  depreciating and can be sold. Desks are per-room assets.
+
+## 7. Assets (capex)
+
+| kind        | price  | life | effect |
+|-------------|--------|------|--------|
+| desk        | $1k    | 5y   | +1 seat in a room (needs free capacity) |
+| laptop      | $2k    | 3y   | one per person, else that person works at 50% |
+| server      | $20k   | 4y   | 1 per 50 customers; each missing server = 10%/month outage chance |
+| coffee      | $5k    | 5y   | +10 morale for everyone, fixes "coffee" quirk |
+| demoRoom    | $40k   | 10y  | enterprise deals ×1.3; occupies a 2×2 block |
+| secondFloor | $150k  | 20y  | adds floor 1 (another 6×8 grid) |
+
+Straight-line depreciation booked at month end. Resale = 60% of book value; the
+P&L takes the loss. Each card shows price, monthly effect, monthly depreciation
+and a payback estimate (price ÷ estimated monthly cash benefit).
+
+## 8. Customers and revenue
+
+- Visitors per month = 2 + 10 × Σ marketer output + 2 × √(ad budget in $k), × 2
+  during press (×3 with PR push), × 0.6 during recession. Arrivals are Poisson per day.
+- 10% of visitors are enterprise prospects; they need a sales rep. The rest are SMB.
+- SMB conversion = 0.8 × (1 − e^(−0.15 × features)) × 0.75 if a competitor is active.
+  Converted: a subscriber paying monthly price = $300 × (1 + 0.1 × features) × tier
+  multiplier (× 0.85 during a price cut). Billed at month end: cash and revenue in
+  the same month.
+- Enterprise: prospect waits in the lobby up to 45 days for a rep with free capacity.
+  A rep closes skill × 0.5 deals per month of attention; close probability = 0.5 ×
+  the feature factor. Deal (annual contract) = $30k × (1 + 0.1 × features) × tier
+  multiplier × 1.3 with a demo room. The full contract value is booked as revenue
+  when signed; an invoice is issued, due in `terms` days (90, minus 5 per finance
+  skill point, floor 30). Cash arrives on the due day. Star reps take 10% commission
+  in cash at signing. Enterprise customers renew (a new deal + invoice) after 12
+  months if served ≥ 50% of their tickets, else they leave.
+- Churn (SMB, daily hazard from a monthly rate) = 2% + 6% × share of tickets
+  unserved. Tickets = 0.3 per customer per month; an agent serves 15 × output.
+- Servers: customers ÷ 50 rounded up needed; shortfall drives outage risk (section 11).
+- Features: feature points accumulate at Σ engineer output per month; a feature
+  ships when points ≥ 4 + features shipped. Price and conversion use the feature
+  count. R&D tier multiplier: tier 1 ×1, tier 2 ×1.5, tier 3 ×2.25.
+- R&D: available from the start. Research points accumulate at Σ researcher output
+  per month; tier 2 at 60, tier 3 at 150. Researchers are paid like seniors.
+- Marketing: needs the room. Ad budget slider $0–$20k per month in $1k steps, opex
+  accrued daily. No room → no slider, no spend.
+- Finance: unlocks the day the first enterprise invoice is issued. Each finance
+  skill point of output cuts terms on new invoices by 5 days (floor 30), halves the
+  default chance on late payers, and the room's existence enables the loan option.
+- Competitor (event): conversion × 0.75 until two more features ship.
+
+## 9. Accounting — the three bars
+
+Profit (accrual, month to date):
+  + SMB fees billed + enterprise contracts signed
+  − salaries − rent − ad spend − loan interest − depreciation − severance
+  − bad debt (invoice written off) − commission − disposal loss − event costs
+
+Free cash flow (month to date):
+  + SMB receipts + invoice collections + asset disposal proceeds
+  − salaries − rent − ad spend − interest − severance − commission − capex − event costs
+
+Cash: bank balance, including financing (equity in, loan in, loan repaid, prepay).
+
+Daily accrual: salaries, rent, ad budget and loan interest accrue 1/30 per day in
+both bars. Depreciation is booked at month end. Commission is paid in cash at
+signing. No tax. Equity and loan cash land instantly.
+
+Identities (tested every close):
+  ΔCash = FCF + equityIn + loanIn − loanRepaid
+  FCF = Profit + depreciation + disposalLoss − capex + disposalProceeds − ΔReceivables
+  where ΔReceivables = AR(end) − AR(start) and AR counts open invoices only.
+  (Bad debt sits in both Profit and ΔReceivables so it cancels; capex sits in FCF
+  while depreciation sits in Profit; enterprise revenue sits in Profit while the
+  cash arrives later. Those three are the course.)
+
+Game over: at a month-end close with cash < 0, after one last desperation knock in
+the current crisis. Loan maturity failure is also game over (section 10).
+
+## 10. Valuation and capital
+
+Required return r (annual) = 0.12 base
+  + burn premium: if FCF run-rate < 0, 0.15 × clamp(1 − runway/12, 0, 1), runway = cash ÷ monthly burn
+  + R&D premium: (R&D salaries ÷ total monthly costs) × 0.10
+  + leverage premium: debt ÷ (debt + last month's value) × 0.08
+  + concentration premium: largest customer's annualised revenue ÷ total annualised revenue × 0.05
+  + recession: 0.05 while active
+
+Forecast: base = average of the last 3 closed months of (FCF + capex − disposal
+proceeds − depreciation) i.e. operating cash flow after maintenance capex. Growth g0
+= trailing 3-month revenue growth per month, clamped to [−10%, +15%], decaying
+linearly to 0.17%/month (2%/yr) over 36 months. Project 60 months, discount at
+monthly rate (1+r)^(1/12) − 1, add a terminal value at month 60 at 2%/yr growth
+(only if the month-60 flow is positive). DCF is an enterprise value.
+
+Floor = cash + 0.9 × open receivables + 0.6 × assets at book − debt
+        + acqui-hire value Σ(skill × $50k) over all people including the founder.
+        (Founder alone at start: $150k + $50k cash = $0.2M, as in the concept HUD.)
+
+Company value = max(DCF + cash − debt, floor). Equity value: debt already netted.
+Shown as one number with a 12-month sparkline. Tapping shows "Investors want r%"
+with each premium listed.
+
+Investor knocks: first at a random day in [90, 240], then every [120, 240] days.
+Desperation knock when runway < 2 months (at most once per 60 days). Offer amount
+= max(6 × monthly burn, 15% of value), min $50k, rounded to $10k; if profitable,
+max(15% of value, $100k).
+- Equity: haircut = 0.10 + 0.25 × riskIndex, riskIndex = clamp((r − 0.12) ÷ 0.43, 0, 1).
+  Pre-money = value × (1 − haircut). Share sold = amount ÷ (pre-money + amount).
+  Founder share multiplies by (1 − share sold). Desperation knock: haircut 0.5.
+- Loan: annual rate = 0.04 + (r − 0.12) ÷ 2. Interest accrues daily. Principal due
+  in one payment 36 months after drawdown. Greyed out (with a hint) without a
+  Finance room, or while a loan is outstanding. Prepay any time, no penalty.
+- Maturity: if cash < principal on the due day, the bank offers one rollover for 12
+  months at +3%; refusing or failing that is game over.
+- Declining a knock costs nothing.
+
+## 11. Events
+
+Every [90, 180] days, none before day 180, one card at a time, clock paused.
+
+1. Big customer pays late (needs an open enterprise invoice): "Wait" → due +60 days,
+   15% chance it is never paid (write-off, halved with finance staff). "Press them"
+   → paid in 10 days, 50% chance that customer will not renew.
+2. Server outage (weighted up when servers are short): "Emergency fix" → −$15k event
+   cost. "Ride it out" → lose 15% of customers.
+3. Press coverage: "PR push" → −$10k, visitors ×3 for 30 days. "Enjoy it" → ×2 for 30 days.
+4. Competitor next door: "Out-build them" → conversion ×0.75 until 2 more features
+   ship. "Cut prices" → no conversion penalty, all prices ×0.85 for 180 days.
+5. Star employee poached (needs a senior or star): "Counter-offer" → +30% salary.
+   "Let them go" → they leave, no severance.
+6. Recession: visitors ×0.6 and +5% required return for 180 days. "Tighten" → all
+   salaries −10% for 180 days, morale −20. "Hold the line" → nothing else.
+
+## 12. Exit, score, seeds, leaderboard
+
+- Sell is enabled from day 720 (month 24) and always shows the live offer.
+- Offer = company value. Score = offer × founder share. The result screen shows
+  offer, share, debt, score and a run summary.
+- Game over screen shows the same summary with score 0.
+- Runs are deterministic from a seed and the action log. Default seed = today's
+  date (YYYYMMDD) so everyone plays the same world; a custom seed can be typed.
+- Leaderboard: localStorage only — name, score, seed, date, months played.
+
+## 13. UI
+
+- HUD (top): four glassy pills — Cash, Profit (MTD), Cash flow (MTD), Company value
+  with sparkline. Below: calendar badge, speed controls, settings gear.
+- Under the HUD: the "why" line (one sentence naming the biggest cash-bridge item,
+  e.g. "Profit up, cash down: $184k is owed to you") and the hint line (contextual
+  one-liner, priority-ordered rules).
+- Four buttons at the bottom: Hire, Build, Invest, Sell.
+  - Hire: Candidates tab (3 per role; disabled with a reason when there is no desk
+    or no cash) and Team tab (rows with role, skill, salary, morale; founder role
+    toggle; pending raise → Grant / Refuse; Fire shows the severance cost).
+  - Build: departments with rent and size; placement mode on the canvas; close room.
+  - Invest: Assets (catalogue + owned with Sell at 60% book) and Capital (current
+    loan, prepay; founder share; rounds; the open knock if any).
+  - Sell: offer, share, debt, score preview; enabled from month 24; confirm.
+- Books (tap any HUD pill): this month's P&L; cash bridge; invoice tray list with due
+  dates; mini balance sheet (cash, receivables, assets at book, debt, your share);
+  12-month history table.
+- Cards (investor, events, maturity, game over, sold): modal, title, drawn portrait,
+  body, quote, choices.
+- Crowd: up to 12 walking figures; beyond that a figure carries a "×N" badge. Coin
+  popups aggregated per customer kind per day. Non-converts leave with a grey puff.
+- Debug drawer (press D): 10× speed, +$100k, force knock, force event, show seed.
+
+## 14. Architecture and contracts
+
+```
+src/sim/types.ts      state, actions, cards, visual events (THE contract)
+src/sim/config.ts     every tuning number (section 15)
+src/sim/rng.ts        seeded PRNG (sfc32) and helpers
+src/sim/ledger.ts     transaction recording + month close + identities
+src/sim/selectors.ts  derived numbers: capacities, outputs, costs, runway, AR
+src/sim/game.ts       createGame, advanceDay, closeMonth, dispatch (tick order)
+src/sim/staff.ts      candidates, hire/fire, morale, raises, quits, learning
+src/sim/rooms.ts      grid, placement validation, open/close, seats
+src/sim/assets.ts     catalogue, buy/sell, depreciation, laptops, effects
+src/sim/product.ts    features, research tiers
+src/sim/customers.ts  visitors, conversion, prospects, deals, invoices, churn, tickets
+src/sim/valuation.ts  required return, DCF, floor
+src/sim/capital.ts    knocks, equity, loans, maturity, prepay
+src/sim/events.ts     the six events
+src/sim/hints.ts      why line + hint line
+src/sim/exit.ts       sell, score, game over
+src/ui/*              renderer (canvas), hud, panels, cards, controller, styles
+test/*                identities, determinism, valuation, balance smoke
+scripts/balance.ts    headless strategies × seeds, prints survival and scores
+```
+
+Tick order (`advanceDay`):
+1. If `state.card` is open or status ≠ playing: return (no time passes).
+2. `day += 1`.
+3. Daily accruals: salaries, rent, ad budget, loan interest (1/30 of monthly).
+4. Staff daily: morale drift, learning (monthly fraction).
+5. Product: feature points, research points; ship features / tiers.
+6. Customers: visitors (Poisson), SMB conversion, prospects matched to reps, deals
+   closed (revenue + invoice + commission), invoice collections due today, SMB
+   churn, enterprise renewals/leavers, prospect expiry.
+7. Effects expiring (press, recession, price cut, salary cut).
+8. Capital: loan maturity check (card), desperation knock, scheduled knock.
+9. Events: scheduled event (card).
+10. If `day % 30 === 0`: `closeMonth`.
+
+Month close (`closeMonth`):
+1. Bill SMB subscriptions (revenue + cash).
+2. Depreciation for every asset; retire fully-depreciated ones at book 0 (keep, value 0).
+3. Tickets served ratio for the month → stored for churn next month; enterprise served flags.
+4. Staff monthly: raise requests, quits, candidate refresh, learning.
+5. Finalise `book` → push to history; start a new book (carry cash/AR/assets/debt).
+6. Valuation recompute; push to sparkline.
+7. Finance unlock check; outage roll (servers short).
+8. Game over check (cash < 0 → desperation card first, then game over).
+
+`dispatch(state, action)` validates with `canDispatch` (same reasons used by the
+UI to disable buttons) and mutates state. All randomness goes through `state.rng`.
+`state.visuals` is a queue of visual events the renderer drains each frame.
+
+## 15. Tuning table (config.ts is the code form of this table)
+
+See section 6–11 for the numbers; config.ts must contain every one of them as a
+named constant with a comment, and nothing in the sim may hard-code a number that
+appears here.
+
+## 16. Verification
+
+- Unit tests: ledger identities after every close over random action sequences;
+  determinism (same seed + same action log → same JSON state); valuation (founder
+  alone ≈ $200k; each premium raises r; a higher r lowers value with the same
+  flows); capital (share maths, loan maturity); events (each choice has its effect).
+- Balance harness: strategies idle / engineer-first / sales-first / balanced /
+  reckless × 200 seeds × 60 months. Targets: balanced survives ≥ 70%, reckless
+  dies ≥ 50%, idle neither dies nor exceeds $0.5M, balanced median score at month
+  36 between $1M and $10M.
