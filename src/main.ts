@@ -34,8 +34,9 @@ const app = document.getElementById('app');
 if (!app) throw new Error('#app missing');
 
 function fitColumn(): void {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  // the body's box, not the window: a host may pad the root for phone safe areas
+  const vw = document.body.clientWidth || window.innerWidth;
+  const vh = document.body.clientHeight || window.innerHeight;
   const s = Math.min(vw / DESIGN_W, vh / DESIGN_H);
   app!.style.setProperty('--s', s.toFixed(4));
   app!.classList.toggle('floating', vw - DESIGN_W * s > 12 || vh - DESIGN_H * s > 12);
