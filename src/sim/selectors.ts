@@ -196,7 +196,14 @@ export function priceCutActive(state: GameState): boolean {
 }
 
 export function priceMult(state: GameState): number {
-  return (1 + CONFIG.product.pricePerFeature * state.features) * tierMult(state) * (priceCutActive(state) ? CONFIG.events.priceCut : 1);
+  const priced = Math.min(state.features, CONFIG.product.priceFeatureCap);
+  return (1 + CONFIG.product.pricePerFeature * priced) * tierMult(state) * (priceCutActive(state) ? CONFIG.events.priceCut : 1);
+}
+
+/** DESIGN.md 8: the market is finite; every extra customer makes the next one a little harder to win. */
+export function marketSaturation(state: GameState): number {
+  const m = CONFIG.customers.marketSize;
+  return m / (m + state.customers.length);
 }
 
 /** Monthly price a new SMB customer would pay today. */
@@ -210,11 +217,11 @@ export function enterpriseDealValue(state: GameState): number {
 }
 
 export function smbConversion(state: GameState): number {
-  return CONFIG.product.conversionMax * featureFactor(state) * (competitorActive(state) ? CONFIG.events.competitorMult : 1);
+  return CONFIG.product.conversionMax * featureFactor(state) * marketSaturation(state) * (competitorActive(state) ? CONFIG.events.competitorMult : 1);
 }
 
 export function enterpriseCloseProb(state: GameState): number {
-  return CONFIG.customers.closeProb * featureFactor(state) * (competitorActive(state) ? CONFIG.events.competitorMult : 1);
+  return CONFIG.customers.closeProb * featureFactor(state) * marketSaturation(state) * (competitorActive(state) ? CONFIG.events.competitorMult : 1);
 }
 
 export function visitorsPerMonth(state: GameState): number {

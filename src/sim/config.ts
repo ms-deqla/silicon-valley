@@ -2,7 +2,7 @@
  * Every tuning number in the game, named and commented. Nothing in src/sim may
  * hard-code a number that appears here. DESIGN.md sections 5–12 are the prose form.
  */
-import type { Archetype, AssetKind, RoomSize } from './types';
+import type { Archetype, AssetKind, EventType, RoomSize } from './types';
 
 export const CONFIG = {
   time: {
@@ -109,6 +109,8 @@ export const CONFIG = {
     featureCostPerFeature: 1,
     /** price multiplier per feature */
     pricePerFeature: 0.10,
+    /** features beyond this no longer raise the price (they still raise conversion) */
+    priceFeatureCap: 10,
     /** smb conversion = max × (1 − e^(−k × features)) */
     conversionK: 0.15,
     conversionMax: 0.8,
@@ -131,6 +133,8 @@ export const CONFIG = {
   },
 
   customers: {
+    /** the market is finite: conversion and close rate scale by marketSize ÷ (marketSize + customers) */
+    marketSize: 600,
     enterpriseShare: 0.10,
     smbPrice: 300,
     enterpriseDeal: 30_000,
@@ -168,13 +172,21 @@ export const CONFIG = {
     recession: 0.05,
     horizonMonths: 60,
     growthMin: -0.10,
-    growthMax: 0.15,
+    growthMax: 0.08,
+    /** trailing growth is measured over this many closed months (shorter while history is short) */
+    growthWindowMonths: 6,
+    /** trailing growth is trusted in proportion to last month's revenue ÷ this (tiny bases do not forecast) */
+    growthTrustRevenue: 20_000,
     terminalGrowthAnnual: 0.02,
-    growthDecayMonths: 36,
+    growthDecayMonths: 24,
+    /** terminal value is at most this many years of the horizon flow */
+    terminalMaxYears: 10,
     runRateMonths: 3,
     arRecovery: 0.9,
     assetRecovery: 0.6,
     acquihirePerSkill: 50_000,
+    /** the acqui-hire part of the floor never exceeds this */
+    acquihireCap: 1_000_000,
     /** sparkline length */
     historyMonths: 60,
   },
@@ -194,6 +206,8 @@ export const CONFIG = {
     /** r − base spans this range for riskIndex 0..1 */
     riskSpan: 0.43,
     desperationHaircut: 0.5,
+    /** an offer never asks for more than this share of the company in one round */
+    maxShareSold: 0.4,
     loanBaseRate: 0.04,
     loanRiskShare: 0.5,
     loanTermMonths: 36,
@@ -225,6 +239,8 @@ export const CONFIG = {
     tightenMorale: -20,
     /** outage event weight multiplier when servers are short */
     outageShortWeight: 4,
+    /** relative draw weights of the six events once eligible (the late payer is the most common story) */
+    weights: { latePayer: 2, outage: 1, press: 1, competitor: 1, poach: 1, recession: 1 } as Record<EventType, number>,
   },
 
   exit: {
@@ -234,6 +250,16 @@ export const CONFIG = {
   ui: {
     maxWalkers: 12,
     logLength: 200,
+    /** at most this many churn figures walk out per day; the Books counters carry the real number */
+    maxChurnVisualsPerDay: 3,
+    /** why line: a cash-bridge item below this is not worth a sentence */
+    whyMinItem: 1_000,
+    /** hint line: "Runway: X months" below this many months */
+    lowRunwayMonths: 3,
+    /** hint line: "Open Marketing" from this many features */
+    marketingHintFeatures: 3,
+    /** hint line: "Support is swamped" below this served share */
+    supportHintServed: 0.8,
   },
 } as const;
 

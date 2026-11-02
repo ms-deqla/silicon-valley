@@ -251,6 +251,8 @@ export interface Valuation {
   value: number;
   /** enterprise value from the forecast (can be negative) */
   dcf: number;
+  /** equity value from operations only: max(0, dcf + cash − debt); what investors size offers on */
+  operating: number;
   floor: number;
   /** required return, annual */
   r: number;

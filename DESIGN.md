@@ -112,13 +112,17 @@ and a payback estimate (price ÷ estimated monthly cash benefit).
 - Visitors per month = 2 + 10 × Σ marketer output + 2 × √(ad budget in $k), × 2
   during press (×3 with PR push), × 0.6 during recession. Arrivals are Poisson per day.
 - 10% of visitors are enterprise prospects; they need a sales rep. The rest are SMB.
-- SMB conversion = 0.8 × (1 − e^(−0.15 × features)) × 0.75 if a competitor is active.
-  Converted: a subscriber paying monthly price = $300 × (1 + 0.1 × features) × tier
-  multiplier (× 0.85 during a price cut). Billed at month end: cash and revenue in
-  the same month.
+- The market is finite: conversion and the enterprise close rate are multiplied by
+  saturation = marketSize ÷ (marketSize + current customers), marketSize 600.
+- SMB conversion = 0.8 × (1 − e^(−0.15 × features)) × saturation × 0.75 if a
+  competitor is active. Converted: a subscriber paying monthly price = $300 ×
+  (1 + 0.1 × min(features, 10)) × tier multiplier (× 0.85 during a price cut).
+  Existing subscribers are re-priced at the live price every month end (features
+  and tiers raise everyone's price; a price cut lowers everyone's). Billed at month
+  end: cash and revenue in the same month.
 - Enterprise: prospect waits in the lobby up to 45 days for a rep with free capacity.
   A rep closes skill × 0.5 deals per month of attention; close probability = 0.5 ×
-  the feature factor. Deal (annual contract) = $30k × (1 + 0.1 × features) × tier
+  the feature factor × saturation. Deal (annual contract) = $30k × (1 + 0.1 × features) × tier
   multiplier × 1.3 with a demo room. The full contract value is booked as revenue
   when signed; an invoice is issued, due in `terms` days (90, minus 5 per finance
   skill point, floor 30). Cash arrives on the due day. Star reps take 10% commission
@@ -178,23 +182,30 @@ Required return r (annual) = 0.12 base
 
 Forecast: base = average of the last 3 closed months of (FCF + capex − disposal
 proceeds − depreciation) i.e. operating cash flow after maintenance capex. Growth g0
-= trailing 3-month revenue growth per month, clamped to [−10%, +15%], decaying
-linearly to 0.17%/month (2%/yr) over 36 months. Project 60 months, discount at
-monthly rate (1+r)^(1/12) − 1, add a terminal value at month 60 at 2%/yr growth
-(only if the month-60 flow is positive). DCF is an enterprise value.
+= trailing revenue growth per month measured over the last 6 closed months (or the
+longest window available, at least 2), multiplied by a trust factor = min(1, last
+month's revenue ÷ $20k) × min(1, window ÷ 6), so a few hundred dollars of revenue
+never forecast a rocket; clamped to [−10%, +8%] per month, decaying linearly to
+0.17%/month (2%/yr) over 24 months. Project 60 months, discount at monthly rate
+(1+r)^(1/12) − 1, add a terminal value at month 60 at 2%/yr growth (only if the
+month-60 flow is positive), capped at 10 years of that flow. DCF is an enterprise value.
+
+Operating value = max(0, DCF + cash − debt). This is what investors size offers on.
 
 Floor = cash + 0.9 × open receivables + 0.6 × assets at book − debt
-        + acqui-hire value Σ(skill × $50k) over all people including the founder.
+        + acqui-hire value min(Σ(skill × $50k) over all people incl. the founder, $1M).
         (Founder alone at start: $150k + $50k cash = $0.2M, as in the concept HUD.)
 
-Company value = max(DCF + cash − debt, floor). Equity value: debt already netted.
+Company value = max(operating value, floor). Equity value: debt already netted.
 Shown as one number with a 12-month sparkline. Tapping shows "Investors want r%"
 with each premium listed.
 
 Investor knocks: first at a random day in [90, 240], then every [120, 240] days.
 Desperation knock when runway < 2 months (at most once per 60 days). Offer amount
-= max(6 × monthly burn, 15% of value), min $50k, rounded to $10k; if profitable,
-max(15% of value, $100k).
+= max(6 × monthly burn, 15% of operating value), min $50k, rounded to $10k; if
+profitable, max(15% of operating value, $100k). One round never sells more than 40%
+of the company: the amount is cut to fit (so a company with no operations can only
+raise against its floor, and hiring cannot pump the next offer).
 - Equity: haircut = 0.10 + 0.25 × riskIndex, riskIndex = clamp((r − 0.12) ÷ 0.43, 0, 1).
   Pre-money = value × (1 − haircut). Share sold = amount ÷ (pre-money + amount).
   Founder share multiplies by (1 − share sold). Desperation knock: haircut 0.5.
@@ -321,6 +332,8 @@ appears here.
   alone ≈ $200k; each premium raises r; a higher r lowers value with the same
   flows); capital (share maths, loan maturity); events (each choice has its effect).
 - Balance harness: strategies idle / engineer-first / sales-first / balanced /
-  reckless × 200 seeds × 60 months. Targets: balanced survives ≥ 70%, reckless
-  dies ≥ 50%, idle neither dies nor exceeds $0.5M, balanced median score at month
-  36 between $1M and $10M.
+  reckless × 200 seeds × 60 months. Targets at month 36: balanced survives ≥ 70%;
+  reckless dies ≥ 50%; idle never dies and its median value stays under $1.5M (a
+  free founder for three years earns a small business, not an exit); balanced median
+  score between $1M and $15M with p90 under $50M; balanced median score at least
+  3× idle's. Engineer-first and sales-first rows are informational.
