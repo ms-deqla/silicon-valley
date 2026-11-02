@@ -55,7 +55,7 @@ function initialGrowth(state: GameState): number {
 }
 
 /** DESIGN.md 10: the five premia on top of the base rate. */
-function premiaOf(state: GameState, runRate: number, runway: number | null): Premia {
+function premiaOf(state: GameState, runway: number | null): Premia {
   const V = CONFIG.valuation;
   const debt = debtOf(state);
   // "last month's value": the valuation still on the state; null while createGame is building it
@@ -63,8 +63,9 @@ function premiaOf(state: GameState, runRate: number, runway: number | null): Pre
   const lastValue = prev ? Math.max(0, prev.value) : 0;
   return {
     base: V.base,
-    // burn: only while the run-rate is negative; an infinite runway (not burning per selectors) adds nothing
-    burn: runRate < 0 && runway !== null ? V.burnMax * clamp(1 - runway / V.burnRunwayMonths, 0, 1) : 0,
+    // burn: DESIGN.md 10 keys it on the FCF run-rate ("if FCF run-rate < 0"), not on the DCF base,
+    // which adds capex back; selectors.runwayMonths is null exactly when that run-rate is not negative
+    burn: runway !== null ? V.burnMax * clamp(1 - runway / V.burnRunwayMonths, 0, 1) : 0,
     rnd: S.rndCostShare(state) * V.rndMax,
     leverage: debt > 0 ? (debt / (debt + lastValue)) * V.leverageMax : 0,
     concentration: S.largestCustomerShare(state) * V.concentrationMax,
@@ -104,7 +105,7 @@ export function computeValuation(state: GameState): Valuation {
   const V = CONFIG.valuation;
   const runRate = runRateOf(state);
   const runway = S.runwayMonths(state);
-  const premia = premiaOf(state, runRate, runway);
+  const premia = premiaOf(state, runway);
   const r = premia.base + premia.burn + premia.rnd + premia.leverage + premia.concentration + premia.recession;
   const growth = initialGrowth(state);
   const dcf = dcfOf(runRate, growth, r);

@@ -120,17 +120,20 @@ function historySection(state: GameState): HTMLElement {
   return sec;
 }
 
+/** The Books tab that carries "Investors want r%" with each premium (DESIGN.md 10): where the value pill lands. */
+export const BOOKS_VALUATION_TAB = 'sheet';
+
 export function booksSheet(controller: ShellController): SheetSpec {
   void controller;
   return {
     id: 'books',
     title: 'Books',
-    tabs: [{ id: 'month', label: 'P&L' }, { id: 'bridge', label: 'Bridge' }, { id: 'sheet', label: 'Balance' }, { id: 'history', label: 'History' }],
+    tabs: [{ id: 'month', label: 'P&L' }, { id: 'bridge', label: 'Bridge' }, { id: BOOKS_VALUATION_TAB, label: 'Balance' }, { id: 'history', label: 'History' }],
     render(body, state, tab) {
       const cal = selectors.calendar(state.day);
       body.appendChild(h('div', { class: 'books-head', text: `${cal.label} · day ${cal.dayOfMonth} · month to date` }));
       if (tab === 'bridge') body.appendChild(bridgeSection(state));
-      else if (tab === 'sheet') body.append(balanceSection(state), valuationSection(state), invoiceSection(state));
+      else if (tab === BOOKS_VALUATION_TAB) body.append(balanceSection(state), valuationSection(state), invoiceSection(state));
       else if (tab === 'history') body.appendChild(historySection(state));
       else body.append(pnlSection(state.book), invoiceSection(state));
     },

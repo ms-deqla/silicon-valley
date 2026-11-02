@@ -230,9 +230,9 @@ export function createOfficeRenderer(canvas: HTMLCanvasElement, controller: Game
       // placement mode: only a valid spot does anything (DESIGN 5)
       const spot = spotAt(x, y);
       if (!spot) return;
-      const v = controller.dispatch({ type: 'placeRoom', kind: pm.kind, size: pm.size, floor: pm.floor, x: spot.x, y: spot.y });
+      // a refusal is toasted by the shell's dispatch (DESIGN 13: the shell owns toasts), never re-reported here
+      controller.dispatch({ type: 'placeRoom', kind: pm.kind, size: pm.size, floor: pm.floor, x: spot.x, y: spot.y });
       controller.setPlacement(null);
-      if (!v.ok && v.reason) controller.toast(v.reason, 'bad');
       return;
     }
     const cell = hitCell(layout, x, y);

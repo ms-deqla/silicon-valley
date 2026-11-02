@@ -9,10 +9,13 @@ import { confirmButton, h, kv, note, section, verdictButton } from './dom';
 import type { SheetSpec } from './sheet';
 
 export function sellSheet(controller: ShellController): SheetSpec {
+  // DESIGN.md 12: Sell has a confirm step. The armed flag lives here, not in the DOM, so the
+  // sheet re-render that follows every game day does not disarm it under the player's finger.
+  let armed = false;
   return {
     id: 'sell',
     title: 'Sell the company',
-    render(body, state) {
+    render(body, state, _tab, api) {
       const sp = scorePreview(state);
       const from = Math.max(sp.sellFromDay, CONFIG.exit.sellFromDay);
       body.appendChild(section('Offer today',
@@ -20,7 +23,7 @@ export function sellSheet(controller: ShellController): SheetSpec {
         kv('Your share', percent(sp.founderShare, 1)),
         kv('Debt', money(sp.debt)),
         kv('Score = offer × share', money(sp.score), 'big total')));
-      body.appendChild(note(`Investors want ${percent(state.valuation.r, 1)} a year. Tap a HUD pill for the breakdown.`, 'muted'));
+      body.appendChild(note(`Investors want ${percent(state.valuation.r, 1)} a year. Tap the Company value pill for the breakdown.`, 'muted'));
       const v = controller.can({ type: 'sell' });
       if (state.day < from) {
         const cal = selectors.calendar(from);
@@ -31,9 +34,12 @@ export function sellSheet(controller: ShellController): SheetSpec {
       } else {
         body.appendChild(confirmButton('Sell the company', `Sell ${state.companyName} for ${money(sp.offer)}? You keep ${money(sp.score)} (${percent(sp.founderShare, 1)}). This ends the run.`, `Sell for ${money(sp.offer)}`, () => {
           controller.dispatch({ type: 'sell' });
-        }, 'btn sellbtn'));
+        }, { armed, setArmed: (a) => { armed = a; api.rerender(); } }, 'btn sellbtn'));
       }
       body.appendChild(h('p', { class: 'note muted', text: 'The offer is always the live company value; there is no time limit, so sell when the number is right.' }));
+    },
+    onClose() {
+      armed = false;
     },
   };
 }

@@ -3,7 +3,7 @@
  * picker when the second floor exists; "Place" enters placement mode on the canvas.
  * DESIGN.md sections 5 and 13.
  */
-import { CONFIG, ROLES, ROLE_LABEL, roomRent, validSpots } from '../../sim';
+import { CONFIG, ROLES, ROLE_LABEL, roomRent, selectors, validSpots } from '../../sim';
 import type { GameState, Role, RoomSize, Verdict } from '../../sim';
 import { no, OK } from '../../sim';
 import type { ShellController } from '../controller';
@@ -25,6 +25,16 @@ export function buildSheet(controller: ShellController, host: SheetHost): SheetS
 
   function placementVerdict(state: GameState, kind: Role | 'demo', size: RoomSize): { verdict: Verdict; spots: { x: number; y: number }[] } {
     if (kind === 'finance' && !state.financeUnlocked) return { verdict: no('Locks until your first invoice'), spots: [] };
+    if (kind === 'demo') {
+      // DESIGN.md 13: a disabled control carries its reason. The demo room's two non-geometric
+      // checks (one demo room, its price) empty validSpots too, so when either fails ask the sim
+      // for its wording instead of blaming the floor.
+      const owned = selectors.hasRoom(state, 'demo') || selectors.hasDemoRoom(state);
+      if (owned || state.cash < CONFIG.assets.catalogue.demoRoom.price) {
+        const v = controller.can({ type: 'placeRoom', kind, size, floor, x: 0, y: 0 });
+        if (!v.ok) return { verdict: v, spots: [] };
+      }
+    }
     const spots = validSpots(state, kind, size, floor);
     if (spots.length === 0) return { verdict: no(`No free spot on floor ${floor + 1}`), spots };
     const v = controller.can({ type: 'placeRoom', kind, size, floor, x: spots[0].x, y: spots[0].y });

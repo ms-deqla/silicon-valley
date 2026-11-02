@@ -2,7 +2,7 @@
  * Customers and product (DESIGN.md section 8): conversion, enterprise deals and invoices,
  * commission, churn, SMB billing, renewals, prospect expiry, features and tiers.
  * States are hand-built: createGame, then people / rooms / features pushed directly so
- * the test does not depend on staff.ts or rooms.ts.
+ * the tests do not depend on rooms.ts, and on staff.ts only where firing a rep is the point.
  */
 import { describe, expect, it } from 'vitest';
 import { CONFIG } from '../src/sim/config';
@@ -11,6 +11,7 @@ import * as L from '../src/sim/ledger';
 import * as S from '../src/sim/selectors';
 import * as customers from '../src/sim/customers';
 import * as product from '../src/sim/product';
+import * as staff from '../src/sim/staff';
 import type { Archetype, Customer, GameState, Invoice, Person, Prospect, Role, RoomKind, Room, VisualEvent } from '../src/sim/types';
 
 const D = CONFIG.time.daysPerMonth;
@@ -471,6 +472,94 @@ describe('prospects', () => {
     expect(s.log.some((l) => l.day === p.expiresDay && /gave up waiting/i.test(l.text))).toBe(true);
     expect(enterpriseCustomers(s)).toHaveLength(0);
     expect(s.invoices).toHaveLength(0);
+  });
+
+  it('a prospect a rep has picked up is worked past day 45 and never "gives up waiting"', () => {
+    // DESIGN.md 8: the 45 days are a limit on waiting for a rep, not on the pitch
+    const s = createGame(16);
+    s.features = 10;
+    s.founderRole = 'sales';
+    const founder = s.people.find((p) => p.founder)!;
+    const a = addProspect(s, CONFIG.customers.prospectWaitDays);
+    const b = addProspect(s, CONFIG.customers.prospectWaitDays);
+    const perDay = S.salesCapacityPerMonth(s) / D;
+    // the founder alone finishes a first prospect inside 45 days but not a second: b is mid-pitch on its expiry day
+    expect(perDay * CONFIG.customers.prospectWaitDays).toBeGreaterThan(1);
+    expect(perDay * CONFIG.customers.prospectWaitDays).toBeLessThan(2);
+    const underTest = new Set([a.id, b.id]);
+    const present = (id: string): boolean => s.prospects.some((p) => p.id === id);
+
+    let checkedOnExpiryDay = false;
+    for (let i = 0; i < 200 && (present(a.id) || present(b.id)); i++) {
+      runDays(s, 1, () => {
+        // keep the lobby to the two prospects under test: the base trickle of visitors may add others
+        s.prospects = s.prospects.filter((p) => underTest.has(p.id));
+      });
+      if (s.day === b.expiresDay) {
+        checkedOnExpiryDay = true;
+        expect(present(a.id)).toBe(false);
+        expect(present(b.id)).toBe(true);
+        expect(b.repId).toBe(founder.id);
+        expect(b.progress).toBeGreaterThan(0);
+        expect(b.progress).toBeLessThan(1);
+      }
+    }
+    expect(checkedOnExpiryDay).toBe(true);
+    expect(s.day).toBeGreaterThan(b.expiresDay);
+    expect(present(a.id) || present(b.id)).toBe(false);
+    const walked = s.log.filter((l) => /walked/i.test(l.text)).length;
+    expect(s.book.dealsSigned + walked).toBe(2);
+    expect(s.log.some((l) => /gave up waiting/i.test(l.text))).toBe(false);
+  });
+
+  it('a prospect whose only rep is fired, with no replacement, still gives up on its expiry day', () => {
+    const s = createGame(17);
+    s.features = 10;
+    addRoom(s, 'sales');
+    const rep = addPerson(s, 'sales', 'senior', 5, CONFIG.people.salaries.senior);
+    const p = addProspect(s, CONFIG.customers.prospectWaitDays);
+    runDays(s, 5);
+    expect(p.repId).toBe(rep.id);
+    expect(p.progress).toBeGreaterThan(0);
+    expect(p.progress).toBeLessThan(1);
+
+    // the real path: staff.fire puts the departed rep's prospects back to waiting
+    staff.fire(s, rep.id, 'fired');
+    expect(S.peopleIn(s, 'sales')).toHaveLength(0);
+    expect(p.repId).toBeNull();
+
+    while (s.day < p.expiresDay - 1) {
+      runDays(s, 1);
+      expect(s.prospects.some((q) => q.id === p.id)).toBe(true);
+    }
+    s.visuals.length = 0;
+    runDays(s, 1);
+    expect(s.day).toBe(p.expiresDay);
+    expect(s.prospects.some((q) => q.id === p.id)).toBe(false);
+    expect(visuals(s, 'visitor').some((v) => v.outcome === 'left')).toBe(true);
+    expect(s.log.some((l) => l.day === p.expiresDay && /gave up waiting/i.test(l.text))).toBe(true);
+    expect(s.book.dealsSigned).toBe(0);
+    expect(s.log.some((l) => /walked/i.test(l.text))).toBe(false);
+  });
+
+  it('a prospect stranded when the founder leaves sales still gives up on its expiry day', () => {
+    const s = createGame(18);
+    s.features = 10;
+    s.founderRole = 'sales';
+    const founder = s.people.find((p) => p.founder)!;
+    const p = addProspect(s, CONFIG.customers.prospectWaitDays);
+    runDays(s, 5);
+    expect(p.repId).toBe(founder.id);
+
+    s.founderRole = 'product'; // repId now names someone who is no longer in sales
+    expect(S.peopleIn(s, 'sales')).toHaveLength(0);
+    runDays(s, p.expiresDay - s.day - 1);
+    expect(s.prospects.some((q) => q.id === p.id)).toBe(true);
+    runDays(s, 1);
+    expect(s.day).toBe(p.expiresDay);
+    expect(s.prospects.some((q) => q.id === p.id)).toBe(false);
+    expect(s.log.some((l) => l.day === p.expiresDay && /gave up waiting/i.test(l.text))).toBe(true);
+    expect(s.book.dealsSigned).toBe(0);
   });
 });
 

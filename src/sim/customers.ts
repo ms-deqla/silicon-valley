@@ -124,6 +124,11 @@ function arriveEnterprise(state: GameState): void {
   });
 }
 
+/** Is the prospect's rep still in sales? False when nobody picked it up, or its rep left (fired, quit, founder off sales). */
+function hasLiveRep(reps: Person[], p: Prospect): boolean {
+  return p.repId !== null && reps.some((r) => r.id === p.repId);
+}
+
 /** The sales person with the highest output; the founder counts while playing sales. */
 function bestRep(state: GameState, reps: Person[]): Person | null {
   let best: Person | null = null;
@@ -151,8 +156,7 @@ function workProspects(state: GameState): void {
   const finished: Prospect[] = [];
   for (const p of state.prospects) {
     if (capacity <= 0) break;
-    const repGone = p.repId !== null && !reps.some((r) => r.id === p.repId);
-    if (best && (p.repId === null || repGone)) p.repId = best.id;
+    if (best && !hasLiveRep(reps, p)) p.repId = best.id;
     const need = 1 - p.progress;
     if (capacity >= need) {
       p.progress = 1;
@@ -265,9 +269,16 @@ function renewContract(state: GameState, c: Customer): void {
   });
 }
 
-/** DESIGN.md 8: a prospect nobody closed within 45 days leaves the lobby. */
+/**
+ * DESIGN.md 8: a prospect waits in the lobby up to 45 days for a rep with free capacity. The limit is on
+ * the wait, not on the pitch: once a rep has picked a prospect up it stays until that rep finishes it
+ * (closeDeal or walkAway). Only a prospect with no live rep gives up on its expiry day: one nobody has
+ * touched yet, or one whose rep left sales (staff.fire clears repId; the founder leaving sales strands
+ * the id) and nobody picked it up again today — workProspects runs first, so a new rep keeps it.
+ */
 function expireProspects(state: GameState): void {
-  const gone = removeWhere(state.prospects, (p) => p.expiresDay <= state.day);
+  const reps = S.peopleIn(state, 'sales');
+  const gone = removeWhere(state.prospects, (p) => p.expiresDay <= state.day && !hasLiveRep(reps, p));
   for (const p of gone) {
     state.visuals.push({ t: 'visitor', day: state.day, outcome: 'left' });
     state.log.push({ day: state.day, text: `An enterprise prospect (${money(p.value)}) gave up waiting for a sales rep.`, tone: 'bad' });

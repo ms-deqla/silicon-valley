@@ -35,7 +35,10 @@ export function adBudgetControl(controller: ShellController, state: GameState): 
       label.textContent = `${money(Number((ev.target as HTMLInputElement).value))}/mo`;
     },
     onChange: (ev) => {
-      controller.dispatch({ type: 'setAdBudget', amount: Number((ev.target as HTMLInputElement).value) });
+      const input = ev.target as HTMLInputElement;
+      controller.dispatch({ type: 'setAdBudget', amount: Number(input.value) });
+      // a range input keeps focus after the gesture; drop it so nothing about the sheet waits on it
+      input.blur();
     },
   });
   return h('div', { class: 'card-row adbudget' },
@@ -45,6 +48,8 @@ export function adBudgetControl(controller: ShellController, state: GameState): 
 }
 
 export function roomSheet(controller: ShellController, roomId: string): SheetSpec {
+  // Close room has a confirm step; its armed flag lives here so the per-day re-render keeps it.
+  let closeArmed = false;
   return {
     id: `room:${roomId}`,
     title: 'Room',
@@ -110,11 +115,12 @@ export function roomSheet(controller: ShellController, roomId: string): SheetSpe
             ? confirmButton('Close room', `${consequence} Cash impact now: ${money(proceeds - severance)}.`, 'Yes, close it', () => {
               controller.dispatch({ type: 'closeRoom', roomId });
               api.close();
-            })
+            }, { armed: closeArmed, setArmed: (a) => { closeArmed = a; api.rerender(); } })
             : verdictButton('Close room', v, () => undefined, 'btn danger')));
       }
     },
     onClose() {
+      closeArmed = false;
       controller.selectRoom(null);
     },
   };

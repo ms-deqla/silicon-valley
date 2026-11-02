@@ -158,7 +158,18 @@ export function closeMonth(state: GameState): void {
   assets.bookMonthlyDepreciation(state);
   staff.monthlyStaff(state);
 
-  // servers short → silent outage risk
+  const closed = L.closeBook(state);
+  state.history.push(closed);
+  state.book = L.newBook(state, closed.month + 1, state.day);
+  state.valuation = valuation.computeValuation(state);
+  closed.valueEnd = state.valuation.value;
+  closed.requiredReturnEnd = state.valuation.r;
+  state.valueHistory.push(state.valuation.value);
+  if (state.valueHistory.length > CONFIG.valuation.historyMonths) state.valueHistory.shift();
+  state.visuals.push({ t: 'close', day: state.day, month: closed.month });
+
+  // DESIGN.md 14 step 7: servers short → silent outage risk, rolled after the book is finalised
+  // and valued, so the customers it costs are churn in the new month, not the one just closed.
   const short = S.serversShort(state);
   if (short > 0) {
     const p = 1 - Math.pow(1 - CONFIG.assets.outageChancePerMissingServer, short);
@@ -169,15 +180,6 @@ export function closeMonth(state: GameState): void {
     }
   }
 
-  const closed = L.closeBook(state);
-  state.history.push(closed);
-  state.book = L.newBook(state, closed.month + 1, state.day);
-  state.valuation = valuation.computeValuation(state);
-  closed.valueEnd = state.valuation.value;
-  closed.requiredReturnEnd = state.valuation.r;
-  state.valueHistory.push(state.valuation.value);
-  if (state.valueHistory.length > CONFIG.valuation.historyMonths) state.valueHistory.shift();
-  state.visuals.push({ t: 'close', day: state.day, month: closed.month });
   if (state.log.length > CONFIG.ui.logLength) state.log.splice(0, state.log.length - CONFIG.ui.logLength);
   solvencyCheck(state);
 }

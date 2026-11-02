@@ -163,9 +163,13 @@ small { font-size: 11px; }
   color: var(--ink-2);
   flex: none;
 }
-.lines { display: flex; flex-direction: column; gap: 2px; min-height: 0; }
-.why { font-size: 12.5px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hint { font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* DESIGN.md 13: the why and hint lines are whole sentences, so they wrap to two rows instead of
+   clipping; the min-height reserves one why row plus a wrapped hint (12.5px and 2 × 12px at
+   line-height 1.35, plus the gap) so the office below does not jump when a sentence changes. */
+.lines { display: flex; flex-direction: column; gap: 2px; min-height: 52px; }
+.why, .hint { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.why { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.hint { font-size: 12px; color: var(--ink-2); }
 
 /* ------------------------------------------------------------------ stage */
 .stage { position: relative; flex: 1; min-height: 0; background: var(--floor); overflow: hidden; }

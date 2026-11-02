@@ -2,7 +2,7 @@
  * Investor knocks, equity rounds, loans, maturity, prepayment. DESIGN.md section 10.
  * Every dollar here moves through ledger.ts; every random pick through state.rng.
  */
-import type { Card, CardChoice, GameState, Verdict } from './types';
+import type { Card, CardChoice, GameState, Loan, Verdict } from './types';
 import { no, OK } from './types';
 import { CONFIG } from './config';
 import { pick, randInt } from './rng';
@@ -32,6 +32,9 @@ const DESPERATION_QUOTES: readonly string[] = [
   'You need cash this month. We need half the company.',
 ];
 
+/** Both money choices carry this when the 40% cap leaves no $10k step to offer (DESIGN.md 10). */
+const NOTHING_TO_RAISE = 'Nothing to raise against: the company is worth too little';
+
 function clamp(x: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, x));
 }
@@ -58,19 +61,31 @@ export function dailyCapital(state: GameState): void {
  * DESIGN.md 10: principal due in one payment on the due day. Paid in full when the
  * cash is there; otherwise the bank offers one rollover (12 months at +3%), after
  * which refusing or failing is game over.
+ *
+ * game.ts runs this check (tick step 8) before a close-day closeMonth (step 10), so on
+ * a close day the month's SMB billing lands under the open card. The cash is therefore
+ * tested again when the card is answered (resolveMaturity), and the card says so; on
+ * any other day nothing can land under the card, so Repay is greyed out.
  */
 function checkMaturity(state: GameState): void {
   const loan = state.loan;
   if (!loan || state.day < loan.dueDay) return;
   const C = CONFIG.capital;
   if (state.cash >= loan.principal) {
-    L.recordLoanRepaid(state, loan.principal);
-    state.loan = null;
-    state.log.push({ day: state.day, text: `Loan repaid: ${fmtMoney(loan.principal)} went back to the bank.`, tone: 'info' });
-    state.visuals.push({ t: 'toast', day: state.day, text: `Loan repaid: ${fmtMoney(loan.principal)}`, tone: 'info' });
+    repayAtMaturity(state, loan, `Loan repaid: ${fmtMoney(loan.principal)} went back to the bank.`);
     return;
   }
+  const closing = state.day % D === 0;
   const newRate = loan.annualRate + C.rolloverPremium;
+  const repay: CardChoice = {
+    id: 'repay',
+    label: 'Repay',
+    detail: closing ? `Pay ${fmtMoney(loan.principal)} if this month's billing covers it` : `Pay ${fmtMoney(loan.principal)} now`,
+  };
+  if (!closing) {
+    repay.disabled = true;
+    repay.reason = `There is only ${fmtMoney(state.cash)} in the bank`;
+  }
   const rollover: CardChoice = {
     id: 'rollover',
     label: 'Roll it over',
@@ -83,18 +98,33 @@ function checkMaturity(state: GameState): void {
   const offer = loan.rolledOver
     ? 'The bank will not extend it again.'
     : `The bank offers one rollover: ${C.rolloverMonths} more months at ${fmtRate(newRate)} a year.`;
+  const balance = closing
+    ? `there is ${fmtMoney(state.cash)} in the bank before this month's subscriptions are billed; if they cover the principal, the loan is simply repaid`
+    : `there is ${fmtMoney(state.cash)} in the bank`;
   state.card = {
     id: `card${state.nextId++}`,
     kind: 'maturity',
     title: 'The loan is due',
     speaker: 'Your bank manager',
     quote: loan.rolledOver ? 'We extended once. We do not extend twice.' : 'We can give you a little more time. It will cost you.',
-    body: `Your ${fmtMoney(loan.principal)} loan came due today and there is ${fmtMoney(state.cash)} in the bank. ${offer}`,
-    choices: [rollover, { id: 'default', label: 'Default', detail: 'The bank calls it in: game over' }],
+    body: `Your ${fmtMoney(loan.principal)} loan came due today and ${balance}. ${offer}`,
+    choices: [repay, rollover, { id: 'default', label: 'Default', detail: 'The bank calls it in: game over' }],
     data: { principal: loan.principal },
     createdDay: state.day,
   };
-  state.log.push({ day: state.day, text: `The ${fmtMoney(loan.principal)} loan is due and the cash is not there.`, tone: 'bad' });
+  state.log.push({
+    day: state.day,
+    text: `The ${fmtMoney(loan.principal)} loan is due and the cash is not there${closing ? ' before the month-end billing' : ''}.`,
+    tone: 'bad',
+  });
+}
+
+/** The principal goes back to the bank through the ledger and the loan is gone. */
+function repayAtMaturity(state: GameState, loan: Loan, text: string): void {
+  L.recordLoanRepaid(state, loan.principal);
+  state.loan = null;
+  state.log.push({ day: state.day, text, tone: 'info' });
+  state.visuals.push({ t: 'toast', day: state.day, text: `Loan repaid: ${fmtMoney(loan.principal)}`, tone: 'info' });
 }
 
 /** DESIGN.md 10: desperation knock when runway < 2 months, at most once per 60 days. */
@@ -110,7 +140,9 @@ function checkDesperation(state: GameState): void {
 
 /**
  * Build and open a knock card (kind 'knock' or 'desperation'): amount, equity terms, loan terms, decline.
- * Loan choice disabled (with reason) without a Finance room or with a loan outstanding.
+ * Loan choice disabled (with reason) without a Finance room or with a loan outstanding; both equity
+ * and loan disabled when the 40% cap leaves nothing to offer (the card still opens, so the schedule
+ * and the crisis flow in game.ts are untouched: declining it costs nothing).
  * Returns null if a card is already open.
  */
 export function openKnock(state: GameState, desperate: boolean): Card | null {
@@ -131,12 +163,19 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
   // DESIGN.md 10: haircut = 0.10 + 0.25 × riskIndex (0.5 when desperate); pre-money = value × (1 − haircut)
   const riskIndex = clamp((val.r - base) / C.riskSpan, 0, 1);
   const haircut = desperate ? C.desperationHaircut : C.haircutBase + C.haircutRisk * riskIndex;
-  const preMoney = Math.max(value * (1 - haircut), 1);
+  const preMoney = value * (1 - haircut);
 
-  // DESIGN.md 10: never more than maxShareSold of the company in one round
+  // DESIGN.md 10: rounded to $10k, and one round never sells more than maxShareSold of the company:
+  // the amount is cut to fit. The cut is applied after rounding and rounded DOWN to the step (on whole
+  // dollars, so float noise cannot drop a step), so share = amount / (pre-money + amount) stays at or
+  // under the cap. When the pre-money cannot carry even one step, nothing is offered: a company with
+  // no operations can only raise against its floor, and the minimum never overrides the cap.
   const maxAmount = preMoney * C.maxShareSold / (1 - C.maxShareSold);
-  const amount = Math.max(C.offerRound, Math.round(Math.min(raw, maxAmount) / C.offerRound) * C.offerRound);
-  const share = amount / (preMoney + amount);
+  const rounded = Math.round(raw / C.offerRound) * C.offerRound;
+  const capped = Math.floor(Math.round(maxAmount) / C.offerRound) * C.offerRound;
+  const amount = Math.min(rounded, capped);
+  const canRaise = amount >= C.offerRound;
+  const share = canRaise ? amount / (preMoney + amount) : 0;
 
   // DESIGN.md 10: loan rate = 0.04 + (r − 0.12) / 2
   const loanRate = C.loanBaseRate + (val.r - base) * C.loanRiskShare;
@@ -144,13 +183,22 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
   const voice = pick(state.rng, INVESTORS);
   const quote = desperate ? pick(state.rng, DESPERATION_QUOTES) : voice.quote;
 
-  const equity: CardChoice = { id: 'equity', label: 'Take equity', detail: `${fmtMoney(amount)} for ${fmtPct(share)}` };
+  const equity: CardChoice = {
+    id: 'equity',
+    label: 'Take equity',
+    detail: canRaise ? `${fmtMoney(amount)} for ${fmtPct(share)}` : 'No stake to sell',
+  };
   const loan: CardChoice = {
     id: 'loan',
     label: 'Take a loan',
-    detail: `${fmtMoney(amount)} at ${fmtRate(loanRate)} a year, due in ${C.loanTermMonths} months`,
+    detail: canRaise ? `${fmtMoney(amount)} at ${fmtRate(loanRate)} a year, due in ${C.loanTermMonths} months` : 'Nothing to lend against',
   };
-  if (!S.hasRoom(state, 'finance')) {
+  if (!canRaise) {
+    equity.disabled = true;
+    equity.reason = NOTHING_TO_RAISE;
+    loan.disabled = true;
+    loan.reason = NOTHING_TO_RAISE;
+  } else if (!S.hasRoom(state, 'finance')) {
     loan.disabled = true;
     loan.reason = 'Open a Finance room to borrow';
   } else if (state.loan) {
@@ -159,11 +207,21 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
   }
   const decline: CardChoice = { id: 'decline', label: 'Not now', detail: 'Costs nothing' };
 
-  const body = desperate
-    ? `Word is out that ${state.companyName} is short of cash. ${voice.fund} will put in ${fmtMoney(amount)} for ${fmtPct(share)} of the company, `
-      + `a ${fmtPct(haircut)} haircut on your ${fmtMoney(value)} value. A loan at ${fmtRate(loanRate)} a year is the other way out.`
-    : `${voice.fund} values ${state.companyName} at ${fmtMoney(preMoney)} before the money. They would put in ${fmtMoney(amount)} `
+  let body: string;
+  if (!canRaise) {
+    body = desperate
+      ? `Word is out that ${state.companyName} is short of cash. ${voice.fund} looked at the books and found nothing to put money against: `
+        + `after a ${fmtPct(haircut)} haircut on your ${fmtMoney(value)} value, not even ${fmtMoney(C.offerRound)} fits inside the ${fmtPct(C.maxShareSold)} `
+        + `they may take in one round.`
+      : `${voice.fund} values ${state.companyName} at ${fmtMoney(preMoney)} before the money: too little to put even ${fmtMoney(C.offerRound)} in `
+        + `without taking more than ${fmtPct(C.maxShareSold)} of the company in one round. Investors want ${fmtRate(val.r)} from a company like yours.`;
+  } else if (desperate) {
+    body = `Word is out that ${state.companyName} is short of cash. ${voice.fund} will put in ${fmtMoney(amount)} for ${fmtPct(share)} of the company, `
+      + `a ${fmtPct(haircut)} haircut on your ${fmtMoney(value)} value. A loan at ${fmtRate(loanRate)} a year is the other way out.`;
+  } else {
+    body = `${voice.fund} values ${state.companyName} at ${fmtMoney(preMoney)} before the money. They would put in ${fmtMoney(amount)} `
       + `for ${fmtPct(share)} of the company, or lend it at ${fmtRate(loanRate)} a year. Investors want ${fmtRate(val.r)} from a company like yours.`;
+  }
 
   const card: Card = {
     id: `card${state.nextId++}`,
@@ -184,9 +242,11 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
 
   state.log.push({
     day: state.day,
-    text: desperate
-      ? `${voice.fund} offers a lifeline: ${fmtMoney(amount)} for ${fmtPct(share)}.`
-      : `${voice.fund} knocks: ${fmtMoney(amount)} for ${fmtPct(share)}, or a loan at ${fmtRate(loanRate)}.`,
+    text: !canRaise
+      ? `${voice.fund} ${desperate ? 'looked at the books' : 'knocks'}, but ${state.companyName} is worth too little to raise against.`
+      : desperate
+        ? `${voice.fund} offers a lifeline: ${fmtMoney(amount)} for ${fmtPct(share)}.`
+        : `${voice.fund} knocks: ${fmtMoney(amount)} for ${fmtPct(share)}, or a loan at ${fmtRate(loanRate)}.`,
     tone: desperate ? 'bad' : 'info',
   });
   return card;
@@ -259,23 +319,33 @@ function resolveKnock(state: GameState, card: Card, choiceId: string): void {
 function resolveMaturity(state: GameState, choiceId: string): void {
   const C = CONFIG.capital;
   const loan = state.loan;
-  switch (choiceId) {
+  if (!loan) return;
+  // DESIGN.md 10 keys the maturity on the cash, so it is tested again here, not only when the card
+  // opened: on a close day the month-end SMB billing (game.ts step 10) landed under the open card.
+  if (state.cash >= loan.principal) {
+    repayAtMaturity(state, loan, `Loan repaid: the month-end billing covered the ${fmtMoney(loan.principal)}.`);
+    return;
+  }
+  // A repayment the cash cannot cover gets the bank's answer: the one rollover, or the call.
+  const tried = choiceId === 'repay';
+  const outcome = tried ? (loan.rolledOver ? 'default' : 'rollover') : choiceId;
+  switch (outcome) {
     case 'rollover': {
-      if (!loan) return;
       // DESIGN.md 10: one rollover for 12 months at +3%
       loan.dueDay += C.rolloverMonths * D;
       loan.annualRate += C.rolloverPremium;
       loan.rolledOver = true;
       state.log.push({
         day: state.day,
-        text: `The bank rolled the ${fmtMoney(loan.principal)} loan over: now ${fmtRate(loan.annualRate)} a year, due on day ${loan.dueDay}.`,
+        text: `${tried ? 'The billing did not cover it. ' : ''}The bank rolled the ${fmtMoney(loan.principal)} loan over: `
+          + `now ${fmtRate(loan.annualRate)} a year, due on day ${loan.dueDay}.`,
         tone: 'info',
       });
       break;
     }
     case 'default':
       // DESIGN.md 10: refusing or failing the rollover is game over
-      gameOver(state, 'The loan came due and could not be paid.');
+      gameOver(state, tried ? 'The loan came due and the month-end billing did not cover it.' : 'The loan came due and could not be paid.');
       break;
     default:
       break;

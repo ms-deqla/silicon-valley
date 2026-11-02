@@ -606,11 +606,11 @@ describe('renderer on a fake canvas', () => {
     expect(ctrl.actions).toEqual([{ type: 'placeRoom', kind: 'sales', size: 'small', floor: 0, x: 4, y: 0 }]);
     expect(ctrl.placementSets).toEqual([null]);
     expect(ctrl.placement).toBeNull();
-    // a refused placement is reported through the shell's toast
+    // a refused placement is toasted by the shell's dispatch (controller.ts), so the renderer must not toast it again
     ctrl.dispatch = () => ({ ok: false, reason: 'No cash.' });
     ctrl.placement = { kind: 'demo', size: 'small', floor: 0, spots: [{ x: 0, y: 0 }] };
     tapAt(8, l.x0 + 0.5 * l.cell, l.floorTop[0] + 0.5 * l.cell);
-    expect(ctrl.toasts).toEqual(['No cash.']);
+    expect(ctrl.toasts).toEqual([]);
     expect(ctrl.placement).toBeNull();
     r.destroy();
     expect(fc.listeners.get('pointerdown')?.length ?? 0).toBe(0);

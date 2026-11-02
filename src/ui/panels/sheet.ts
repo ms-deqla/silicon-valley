@@ -1,7 +1,8 @@
 /**
  * Bottom sheets: one open at a time, re-rendered on every state change while open.
- * Re-renders are deferred while a pointer is down or an input inside the sheet has
- * focus, so a tap or a slider drag never lands on an element that was just replaced.
+ * Re-renders are deferred while a pointer is down, while a select's native popup is up,
+ * or while a text field inside the sheet has focus, so a tap, a slider drag or a pick
+ * never lands on an element that was just replaced.
  */
 import type { GameState } from '../../sim';
 import { h } from './dom';
@@ -21,10 +22,11 @@ export interface SheetSpec {
 }
 
 export interface SheetHost {
-  open(spec: SheetSpec): void;
+  /** Open a sheet, on the given tab when one is named (else the remembered or first tab). */
+  open(spec: SheetSpec, tab?: string): void;
   close(): void;
-  /** Close when the same sheet is open, otherwise open it. */
-  toggle(spec: SheetSpec): void;
+  /** Close when the same sheet is open (on that tab, when one is named), otherwise open it. */
+  toggle(spec: SheetSpec, tab?: string): void;
   /** Re-render the open sheet (called on every state change). */
   update(): void;
   readonly openId: string | null;
@@ -55,14 +57,21 @@ export function createSheetHost(layer: HTMLElement, getState: () => GameState): 
   sheet.addEventListener('pointerdown', () => {
     held = true;
   }, true);
-  const release = (): void => {
+  /** A select's gesture ends at its change or blur, not at pointerup: its native popup is open in between. */
+  const selectIn = (ev: Event): boolean => ev.target instanceof HTMLSelectElement && body.contains(ev.target);
+  const release = (ev?: Event): void => {
     if (!held) return;
+    if (ev && selectIn(ev)) return;
     held = false;
     if (dirty) setTimeout(() => { if (dirty) rerender(); }, 0);
   };
   window.addEventListener('pointerup', release, true);
   window.addEventListener('pointercancel', release, true);
-  body.addEventListener('focusout', () => {
+  body.addEventListener('change', (ev) => {
+    if (selectIn(ev)) release();
+  });
+  body.addEventListener('focusout', (ev) => {
+    if (selectIn(ev)) held = false;
     if (dirty) setTimeout(() => { if (dirty) rerender(); }, 0);
   });
 
@@ -94,9 +103,12 @@ export function createSheetHost(layer: HTMLElement, getState: () => GameState): 
     }
   }
 
+  /** Only text entry needs the focus guard: a range input keeps focus long after its drag, which `held` already covers. */
   function focusedInput(): boolean {
     const a = document.activeElement;
-    return !!a && body.contains(a) && (a instanceof HTMLInputElement || a instanceof HTMLSelectElement || a instanceof HTMLTextAreaElement);
+    if (!a || !body.contains(a)) return false;
+    if (a instanceof HTMLTextAreaElement) return true;
+    return a instanceof HTMLInputElement && a.type !== 'range' && a.type !== 'checkbox' && a.type !== 'radio';
   }
 
   function rerender(force = false): void {
@@ -112,10 +124,11 @@ export function createSheetHost(layer: HTMLElement, getState: () => GameState): 
     body.scrollTop = top;
   }
 
-  function open(spec: SheetSpec): void {
+  function open(spec: SheetSpec, wantTab?: string): void {
     const previous = current;
     current = spec;
     if (previous && previous.id !== spec.id) previous.onClose?.();
+    if (wantTab !== undefined && spec.tabs?.some((t) => t.id === wantTab)) tabMemory.set(spec.id, wantTab);
     tab = tabMemory.get(spec.id) ?? spec.tabs?.[0]?.id ?? '';
     titleEl.textContent = spec.title;
     renderTabs();
@@ -139,9 +152,9 @@ export function createSheetHost(layer: HTMLElement, getState: () => GameState): 
   return {
     open,
     close,
-    toggle(spec) {
-      if (current?.id === spec.id) close();
-      else open(spec);
+    toggle(spec, wantTab) {
+      if (current?.id === spec.id && (wantTab === undefined || wantTab === tab)) close();
+      else open(spec, wantTab);
     },
     update() {
       rerender();

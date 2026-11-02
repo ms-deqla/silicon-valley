@@ -7,7 +7,7 @@ import { hintLine, ledger, selectors, whyLine } from '../sim';
 import type { GameState } from '../sim';
 import type { Speed } from './api';
 import type { ShellController } from './controller';
-import { money } from './format';
+import { money, percent } from './format';
 import { h, svg } from './panels/dom';
 
 export interface Hud {
@@ -19,7 +19,10 @@ export interface Hud {
 }
 
 export interface HudHooks {
+  /** Cash, Profit, Cash flow pills: the Books on the remembered tab. */
   onBooks(): void;
+  /** The Company value pill: the Books where "Investors want r%" lists each premium (DESIGN.md 10). */
+  onValue(): void;
   onGear(): void;
 }
 
@@ -46,9 +49,9 @@ function sparkPaths(values: number[]): { line: string; area: string; up: boolean
 }
 
 export function createHud(controller: ShellController, hooks: HudHooks): Hud {
-  function pill(label: string, extra?: Node): { el: HTMLElement; value: HTMLElement } {
+  function pill(label: string, onClick: () => void, title: string, extra?: Node): { el: HTMLElement; value: HTMLElement } {
     const value = h('span', { class: 'pill-value', text: '—' });
-    const el = h('button', { class: 'pill', type: 'button', title: 'Open the books', onClick: hooks.onBooks },
+    const el = h('button', { class: 'pill', type: 'button', title, onClick },
       h('span', { class: 'pill-label', text: label }),
       h('span', { class: 'pill-row' }, value, extra ?? null));
     return { el, value };
@@ -58,10 +61,10 @@ export function createHud(controller: ShellController, hooks: HudHooks): Hud {
   const sparkArea = svg('path', { class: 'spark-area', d: '' });
   const spark = svg('svg', { class: 'spark', viewBox: `0 0 ${SPARK_W} ${SPARK_H}`, 'aria-hidden': 'true' }, sparkArea, sparkLine);
 
-  const cash = pill('Cash');
-  const profit = pill('Profit · month to date');
-  const fcf = pill('Cash flow · month to date');
-  const value = pill('Company value', spark);
+  const cash = pill('Cash', hooks.onBooks, 'Open the books');
+  const profit = pill('Profit · month to date', hooks.onBooks, 'Open the books');
+  const fcf = pill('Cash flow · month to date', hooks.onBooks, 'Open the books');
+  const value = pill('Company value', hooks.onValue, 'What investors want', spark);
 
   const calLabel = h('b', { class: 'cal-label', text: '' });
   const calDay = h('span', { class: 'cal-day', text: '' });
@@ -118,6 +121,7 @@ export function createHud(controller: ShellController, hooks: HudHooks): Hud {
     fcf.value.textContent = money(f);
     tone(fcf.value, f);
     value.value.textContent = money(state.valuation.value);
+    value.el.title = `Investors want ${percent(state.valuation.r, 1)} a year. Tap for the breakdown.`;
     const sp = sparkPaths(state.valueHistory);
     sparkLine.setAttribute('d', sp.line);
     sparkArea.setAttribute('d', sp.area);
@@ -128,11 +132,14 @@ export function createHud(controller: ShellController, hooks: HudHooks): Hud {
     calDay.textContent = `Day ${cal.dayOfMonth}`;
     calendar.title = `Game day ${state.day}`;
 
+    // DESIGN.md 13: whole sentences; the title keeps the full text reachable if the two-row clamp ever cuts one
     const w = whyLine(state);
     why.textContent = w;
+    why.title = w;
     why.hidden = !w;
     const hi = hintLine(state);
     hint.textContent = hi;
+    hint.title = hi;
     hint.hidden = !hi;
     refreshSpeed();
   }

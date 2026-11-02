@@ -148,15 +148,27 @@ export function moraleBar(morale: number): HTMLElement {
     h('span', { class: 'morale-num', text: String(v) }));
 }
 
-/** Two-step confirm: the first tap reveals the real button and a cancel. */
-export function confirmButton(label: Child, question: string, confirmLabel: string, onConfirm: () => void, cls = 'btn danger'): HTMLElement {
+/**
+ * Where a two-step confirm keeps its "armed" flag. Sheets are rebuilt on every state
+ * change (every game day), so the flag lives in the sheet's closure, never in the DOM;
+ * setArmed flips it and re-renders the sheet.
+ */
+export interface ArmedConfirm {
+  armed: boolean;
+  setArmed(armed: boolean): void;
+}
+
+/** Two-step confirm: the first tap reveals the real button and a cancel; `confirm.armed` says which to draw. */
+export function confirmButton(label: Child, question: string, confirmLabel: string, onConfirm: () => void, confirm: ArmedConfirm, cls = 'btn danger'): HTMLElement {
   const wrap = h('div', { class: 'confirm' });
-  const arm = h('button', { class: cls, type: 'button', onClick: () => { wrap.replaceChildren(armed); } }, label);
-  const armed = h('div', { class: 'confirm-armed' },
+  if (!confirm.armed) {
+    wrap.appendChild(h('button', { class: cls, type: 'button', onClick: () => confirm.setArmed(true) }, label));
+    return wrap;
+  }
+  wrap.appendChild(h('div', { class: 'confirm-armed' },
     h('p', { class: 'note', text: question }),
     h('div', { class: 'btn-row' },
       h('button', { class: cls, type: 'button', text: confirmLabel, onClick: onConfirm }),
-      h('button', { class: 'btn ghost', type: 'button', text: 'Cancel', onClick: () => { wrap.replaceChildren(arm); } })));
-  wrap.appendChild(arm);
+      h('button', { class: 'btn ghost', type: 'button', text: 'Cancel', onClick: () => confirm.setArmed(false) }))));
   return wrap;
 }

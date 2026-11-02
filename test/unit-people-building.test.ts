@@ -103,7 +103,8 @@ describe('candidates (DESIGN 6)', () => {
           expect(c.skill).toBeGreaterThanOrEqual(lo);
           expect(c.skill).toBeLessThanOrEqual(hi);
           expect(Math.round(c.skill * 10) / 10).toBe(c.skill);
-          const base = P.salaries[c.archetype];
+          // DESIGN.md 8: researchers are paid like seniors, whatever their archetype
+          const base = c.role === 'rnd' ? P.salaries.senior : P.salaries[c.archetype];
           expect(c.salary % 100).toBe(0);
           expect(c.salary).toBeGreaterThanOrEqual(base * (1 - P.salaryNoise) - 50);
           expect(c.salary).toBeLessThanOrEqual(base * (1 + P.salaryNoise) + 50);
@@ -115,6 +116,53 @@ describe('candidates (DESIGN 6)', () => {
     }
     expect(seenArchetypes.size).toBe(4);
     expect(seenQuirks.size).toBe(6);
+  });
+
+  it('researchers are paid like seniors whatever archetype they come as (DESIGN 8)', () => {
+    const senior = P.salaries.senior;
+    const seen = new Set<Archetype>();
+    let firstNonSenior: { seed: number; id: string } | null = null;
+    for (let seed = 1; seed <= 40; seed++) {
+      const s = createGame(seed);
+      for (const c of s.candidates.rnd) {
+        const where = `${c.archetype} researcher, seed ${seed}`;
+        expect(c.salary % 100, where).toBe(0);
+        expect(c.salary, where).toBeGreaterThanOrEqual(senior * (1 - P.salaryNoise) - 50);
+        expect(c.salary, where).toBeLessThanOrEqual(senior * (1 + P.salaryNoise) + 50);
+        // the archetype still sets the skill, so a junior researcher is a junior at a senior price
+        const [lo, hi] = P.skill[c.archetype];
+        expect(c.skill, where).toBeGreaterThanOrEqual(lo);
+        expect(c.skill, where).toBeLessThanOrEqual(hi);
+        if (c.archetype === 'senior') expect(c.pitch).not.toContain('senior rate');
+        else expect(c.pitch).toContain('Researchers are paid at the senior rate.');
+        seen.add(c.archetype);
+        if (!firstNonSenior && c.archetype !== 'senior') firstNonSenior = { seed, id: c.id };
+      }
+      // every other role still pays by archetype, so a junior engineer stays cheap
+      for (const role of ROLES) {
+        if (role === 'rnd') continue;
+        for (const c of s.candidates[role]) {
+          expect(c.salary, `${c.archetype} ${role}, seed ${seed}`).toBeLessThanOrEqual(P.salaries[c.archetype] * (1 + P.salaryNoise) + 50);
+        }
+      }
+    }
+    // the rule only bites when non-senior researchers are drawn at all
+    expect(seen.has('junior') || seen.has('mid') || seen.has('star')).toBe(true);
+    expect(firstNonSenior).not.toBeNull();
+
+    // the senior-band salary follows the hire into payroll and the R&D cost share
+    const s = game((firstNonSenior as { seed: number; id: string }).seed);
+    const c = s.candidates.rnd.find((x) => x.id === (firstNonSenior as { seed: number; id: string }).id)!;
+    assets.buy(s, 'desk', 'garage');
+    expect(staff.canHire(s, c.id).ok).toBe(true);
+    staff.hire(s, c.id);
+    const p = hired(s)[0];
+    expect(p.role).toBe('rnd');
+    expect(p.archetype).toBe(c.archetype);
+    expect(p.baseSalary).toBe(c.salary);
+    expect(p.baseSalary).toBeGreaterThanOrEqual(senior * (1 - P.salaryNoise) - 50);
+    expect(S.monthlySalaries(s)).toBe(c.salary);
+    expect(S.rndCostShare(s)).toBeCloseTo(1, 10);
   });
 
   it('the month-end refresh replaces every role with fresh candidates', () => {

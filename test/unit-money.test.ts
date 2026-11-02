@@ -5,11 +5,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CONFIG, advanceDay, advanceTo, canDispatch, createGame, dispatch, ledger, selectors } from '../src/sim';
-import type { Customer, GameState, MonthBook, Person, Prospect, Room } from '../src/sim';
+import type { Card, CardChoice, Customer, GameState, MonthBook, Person, Prospect, Room } from '../src/sim';
 import { computeValuation } from '../src/sim/valuation';
 import { canPrepay, openKnock } from '../src/sim/capital';
 import { canSell, gameOver, scorePreview } from '../src/sim/exit';
-import { fmtMoney, hintLine, whyLine } from '../src/sim/hints';
+import { fmtMoney, fmtPct, hintLine, whyLine } from '../src/sim/hints';
 
 const V = CONFIG.valuation;
 const C = CONFIG.capital;
@@ -91,6 +91,41 @@ function takeLoan(seed = 1): GameState {
   return s;
 }
 
+/**
+ * A $100k loan falling due on the first close with $85k in the bank and `n` subscribers, whose
+ * month-end billing lands under the open maturity card (game.ts: capital step 8, closeMonth step 10).
+ * Every loan taken on a crisis card at a close falls due on a close day, so this is the common case.
+ */
+function maturityAtClose(n: number): GameState {
+  const s = takeLoan();
+  if (!s.loan) throw new Error('no loan');
+  s.loan.dueDay = D;
+  for (let i = 0; i < n; i++) s.customers.push(smb(s));
+  for (let i = 0; i < 4; i++) s.assets.push({ id: `srv${i}`, kind: 'server', cost: 20_000, bookValue: 20_000, lifeMonths: 48, boughtDay: 0, roomId: null });
+  ledger.recordCapex(s, 65_000); // $85k: short of the principal until the subscribers pay
+  // that capex makes the first closed month look like heavy burn; a lifeline offered today keeps
+  // the desperation knock (DESIGN.md 10, once per 60 days) from stepping in front of the maturity
+  s.schedule.lastDesperationDay = s.day;
+  advanceTo(s, D);
+  if (s.day !== D || s.card?.kind !== 'maturity') throw new Error('no maturity card at the close');
+  return s;
+}
+
+/** openKnock against a hand-set company value; r sits at the base rate, so the normal haircut is 10%. */
+function knockAt(value: number, desperate: boolean, setup?: (s: GameState) => void): {
+  s: GameState; card: Card; amount: number; share: number; preMoney: number; equity: CardChoice; loan: CardChoice;
+} {
+  const s = createGame(1);
+  setup?.(s);
+  s.valuation = { ...s.valuation, value, floor: value };
+  const card = openKnock(s, desperate);
+  if (!card) throw new Error('no card');
+  const equity = card.choices.find((c) => c.id === 'equity');
+  const loan = card.choices.find((c) => c.id === 'loan');
+  if (!equity || !loan) throw new Error('choices missing');
+  return { s, card, amount: card.data.amount as number, share: card.data.share as number, preMoney: card.data.preMoney as number, equity, loan };
+}
+
 /** Advance to a day, answering every knock on the way (the first one with `first`, the rest declined). */
 function runTo(state: GameState, day: number, first = 'decline'): void {
   let answered = false;
@@ -150,6 +185,24 @@ describe('valuation', () => {
     const s = createGame(1);
     s.history.push(closedMonth(s, 0, { fcf: 5_000 }));
     expect(computeValuation(s).premia.burn).toBe(0);
+  });
+
+  it('burn premium keys on the FCF run-rate, not the DCF base: a capex-heavy month still counts as burn', () => {
+    // DESIGN.md 10: "if FCF run-rate < 0". Operating cash flow after maintenance capex (the DCF base) is
+    // +$5k a month here, but the servers bought in month 3 leave the company burning with 3 months of cash.
+    const s = createGame(1);
+    s.history.push(closedMonth(s, 0, { fcf: 5_000 }));
+    s.history.push(closedMonth(s, 1, { fcf: 5_000 }));
+    s.history.push(closedMonth(s, 2, { fcf: -15_000, capex: 20_000 }));
+    ledger.recordCapex(s, CONFIG.start.cash - 5_000); // $5k left in the bank
+    const v = computeValuation(s);
+    const runway = 5_000 / -((5_000 + 5_000 - 15_000) / 3); // 3 months
+    expect(v.runRate).toBeCloseTo(5_000, 6);
+    expect(selectors.runwayMonths(s)).toBeCloseTo(runway, 6);
+    expect(v.runwayMonths).toBeCloseTo(runway, 6);
+    expect(v.premia.burn).toBeCloseTo(V.burnMax * (1 - runway / V.burnRunwayMonths), 10); // 0.1125
+    expect(v.r).toBeCloseTo(V.base + V.burnMax * (1 - runway / V.burnRunwayMonths), 10);
+    expect(v.r).toBeGreaterThan(V.base);
   });
 
   it('R&D premium: researcher salaries as a share of costs', () => {
@@ -352,6 +405,88 @@ describe('capital: knocks and equity', () => {
     expect(s.rounds[0].desperate).toBe(true);
   });
 
+  it('one round never sells more than 40%: rounding to $10k never pushes the share past the cap', () => {
+    // DESIGN.md 10: "the amount is cut to fit". Each of the first four used to round the cut amount back up over 40%.
+    const cases: [number, boolean][] = [[45_000, true], [60_000, false], [100_000, false], [135_366, true], [310_000, false], [1_000_000, false]];
+    for (const [value, desperate] of cases) {
+      const { amount, share, preMoney, equity } = knockAt(value, desperate);
+      const label = `value ${value}${desperate ? ', desperate' : ''}`;
+      expect(preMoney, label).toBeCloseTo(value * (1 - (desperate ? C.desperationHaircut : C.haircutBase)), 6);
+      expect(equity.disabled, label).toBeFalsy();
+      expect(amount % C.offerRound, label).toBe(0);
+      expect(amount, label).toBeGreaterThanOrEqual(C.offerRound);
+      expect(share, label).toBeLessThanOrEqual(C.maxShareSold);
+      expect(share, label).toBeCloseTo(amount / (preMoney + amount), 12);
+      expect(equity.detail, label).toBe(`${fmtMoney(amount)} for ${fmtPct(share)}`);
+    }
+    // desperate at $45k: $22.5k of pre-money carries $15k at 40%, so one $10k step, not the $20k (47%) rounding gave
+    const a = knockAt(45_000, true);
+    expect(a.amount).toBe(10_000);
+    expect(a.share).toBeCloseTo(10_000 / 32_500, 10);
+    // the repo's own random run: pre-money $67,683 carries $45,122, so $40k, not $50k for 42.5%
+    const b = knockAt(67_683 / (1 - C.desperationHaircut), true);
+    expect(b.preMoney).toBeCloseTo(67_683, 6);
+    expect(b.amount).toBe(40_000);
+    expect(b.share).toBeLessThan(C.maxShareSold);
+    // exactly on the cap: $90k of pre-money carries $60k, and 60 / 150 is 40% on the nose
+    const c = knockAt(100_000, false);
+    expect(c.amount).toBe(60_000);
+    expect(c.share).toBeCloseTo(C.maxShareSold, 12);
+    expect(c.share).toBeLessThanOrEqual(C.maxShareSold);
+    // the cap is not binding here: the plain $100k minimum for a profitable company
+    const d = knockAt(1_000_000, false);
+    expect(d.amount).toBe(C.offerMinProfitable);
+  });
+
+  it('too little value to carry one $10k step inside the cap: no stake, no loan, the founder keeps everything', () => {
+    // DESIGN.md 10: a company with no operations can only raise against its floor. Under $15k of pre-money
+    // not even $10k fits inside 40%, so the $10k minimum must not win (it used to sell 99.99% for $10k).
+    const cases: [number, boolean][] = [[0, true], [0, false], [10_000, true], [25_000, true], [14_000, false]];
+    for (const [value, desperate] of cases) {
+      const { s, card, amount, share, equity, loan } = knockAt(value, desperate, (st) => st.rooms.push(room('finance')));
+      const label = `value ${value}${desperate ? ', desperate' : ''}`;
+      expect(amount, label).toBe(0);
+      expect(share, label).toBe(0);
+      expect(equity.disabled, label).toBe(true);
+      expect(equity.reason, label).toMatch(/worth too little/);
+      expect(loan.disabled, label).toBe(true);
+      expect(loan.reason, label).toMatch(/worth too little/);
+      expect(card.choices.map((ch) => ch.id), label).toEqual(['equity', 'loan', 'decline']);
+      expect(card.choices[2].disabled, label).toBeFalsy();
+      expect(card.body, label).toMatch(/nothing to put money against|too little/);
+      expect(s.schedule.nextKnockDay, label).toBeGreaterThanOrEqual(s.day + C.knockEveryDays[0]);
+      expect(canDispatch(s, { type: 'card', choiceId: 'equity' }).ok, label).toBe(false);
+      expect(canDispatch(s, { type: 'card', choiceId: 'loan' }).ok, label).toBe(false);
+      expect(dispatch(s, { type: 'card', choiceId: 'decline' }).ok, label).toBe(true);
+      expect(s.card, label).toBeNull();
+      expect(s.founderShare, label).toBe(1);
+      expect(s.rounds, label).toHaveLength(0);
+      expect(s.loan, label).toBeNull();
+    }
+  });
+
+  it('a leveraged company under water gets a lifeline that offers nothing, not the whole company for $10k', () => {
+    // founder alone, $400k owed, −$10k in the bank: floor −$258k, operating 0, value 0
+    const s = createGame(1);
+    s.rooms.push(room('finance'));
+    s.loan = { id: 'l', principal: 400_000, annualRate: 0.04, startDay: 0, dueDay: 1080, rolledOver: false };
+    ledger.recordCapex(s, CONFIG.start.cash + 10_000);
+    s.valuation = computeValuation(s);
+    expect(s.valuation.floor).toBeLessThan(0);
+    expect(s.valuation.value).toBe(0);
+    const card = openKnock(s, true);
+    if (!card) throw new Error('no card');
+    expect(card.kind).toBe('desperation');
+    expect(card.data.amount).toBe(0);
+    expect(card.data.share).toBe(0);
+    expect(card.choices.find((c) => c.id === 'equity')?.disabled).toBe(true);
+    expect(dispatch(s, { type: 'card', choiceId: 'equity' }).ok).toBe(false);
+    expect(dispatch(s, { type: 'card', choiceId: 'decline' }).ok).toBe(true);
+    expect(s.founderShare).toBe(1);
+    expect(s.rounds).toHaveLength(0);
+    expect(s.cash).toBe(-10_000);
+  });
+
   it('desperation knock fires when runway < 2 months and respects the cooldown', () => {
     const s = createGame(1);
     s.people.push(person(s, 'product', 3, 28_000)); // runway 50/28 ≈ 1.8 months
@@ -453,7 +588,12 @@ describe('capital: loans', () => {
     expect(s.card?.kind).toBe('maturity');
     const rollover = s.card?.choices.find((c) => c.id === 'rollover');
     expect(rollover?.disabled).toBeFalsy();
-    expect(s.card?.choices.map((c) => c.id)).toEqual(['rollover', 'default']);
+    expect(s.card?.choices.map((c) => c.id)).toEqual(['repay', 'rollover', 'default']);
+    // not a close day: nothing can land under the card, so there is no repaying $100k with $10k
+    expect(s.card?.choices[0].disabled).toBe(true);
+    expect(s.card?.choices[0].reason).toContain('$10k');
+    expect(canDispatch(s, { type: 'card', choiceId: 'repay' }).ok).toBe(false);
+    expect(s.card?.body).not.toContain('before this month');
 
     const oldDue = s.loan.dueDay;
     const oldRate = s.loan.annualRate;
@@ -480,6 +620,63 @@ describe('capital: loans', () => {
     const day = s.day;
     advanceDay(s);
     expect(s.day).toBe(day); // the clock stops
+  });
+
+  for (const choiceId of ['repay', 'rollover', 'default']) {
+    it(`maturity on a close day: the billing landed under the card, so '${choiceId}' repays the loan`, () => {
+      // DESIGN.md 10 keys the maturity on the cash; the card opened with $85k but the close billed $60k under it
+      const s = maturityAtClose(200);
+      expect(s.history, 'the close ran under the open card').toHaveLength(1);
+      expect(s.cash, 'and the billing covered the principal').toBeGreaterThanOrEqual(100_000);
+      expect(s.card?.body).toContain("before this month's subscriptions are billed");
+      expect(s.card?.body).toContain('$85k');
+      expect(s.card?.choices.map((c) => c.id)).toEqual(['repay', 'rollover', 'default']);
+      expect(s.card?.choices[0].disabled).toBeFalsy();
+      expect(canDispatch(s, { type: 'card', choiceId: 'repay' }).ok).toBe(true);
+      const before = s.cash;
+      expect(dispatch(s, { type: 'card', choiceId }).ok).toBe(true);
+      expect(s.card).toBeNull();
+      expect(s.status).toBe('playing');
+      expect(s.loan).toBeNull();
+      expect(s.cash).toBe(before - 100_000);
+      expect(s.book.fin.loanRepaid).toBe(100_000);
+      expect(s.log.at(-1)?.text).toMatch(/repaid/i);
+      expect(s.visuals.some((v) => v.t === 'toast' && v.text.includes('repaid'))).toBe(true);
+      // the repayment sits in the new month, and the books still reconcile at the next close
+      advanceTo(s, 2 * D);
+      expect(s.history).toHaveLength(2);
+      expect(s.history[0].debtEnd).toBe(100_000);
+      expect(s.history[1].fin.loanRepaid).toBe(100_000);
+      expect(s.history[1].debtEnd).toBe(0);
+      for (const b of s.history) expect(ledger.checkIdentities(b), `month ${b.month}`).toEqual([]);
+    });
+  }
+
+  it("maturity on a close day: when the billing falls short, Repay gets the bank's answer: one rollover, then the call", () => {
+    const s = maturityAtClose(20); // about $6k of billing: still short
+    expect(s.history).toHaveLength(1);
+    expect(s.cash).toBeLessThan(100_000);
+    expect(dispatch(s, { type: 'card', choiceId: 'repay' }).ok).toBe(true);
+    expect(s.status).toBe('playing');
+    expect(s.loan?.rolledOver).toBe(true);
+    expect(s.loan?.dueDay).toBe(D + C.rolloverMonths * D);
+    expect(s.loan?.annualRate).toBeCloseTo(C.loanBaseRate + C.rolloverPremium, 10);
+    expect(s.book.fin.loanRepaid).toBe(0);
+    expect(s.log.at(-1)?.text).toMatch(/did not cover/);
+
+    // the second maturity, on a close day again, with the cash still short: the bank calls it in
+    if (!s.loan) throw new Error('no loan');
+    s.loan.dueDay = 2 * D;
+    advanceTo(s, 2 * D);
+    expect(s.card?.kind).toBe('maturity');
+    expect(s.history).toHaveLength(2);
+    expect(s.cash).toBeLessThan(100_000);
+    expect(s.card?.choices.find((c) => c.id === 'rollover')?.disabled).toBe(true);
+    expect(s.card?.choices.find((c) => c.id === 'repay')?.disabled).toBeFalsy();
+    expect(dispatch(s, { type: 'card', choiceId: 'repay' }).ok).toBe(true);
+    expect(s.status).toBe('gameOver');
+    expect(s.result).toMatchObject({ kind: 'gameOver', score: 0, debt: 100_000 });
+    expect(s.result?.reason).toMatch(/billing/);
   });
 
   it('prepay: any time the cash covers the principal, no penalty', () => {

@@ -266,10 +266,10 @@ export function invoiceTermsDays(state: GameState): number {
   return Math.max(f.termsFloor, f.terms - f.termsPerSkill * financeOutput);
 }
 
-/** Is a department overloaded (demand above capacity)? Used for morale. */
+/** Is a department overloaded? DESIGN.md 6: dept demand > capacity, no slack. Used for morale. */
 export function roleOverloaded(state: GameState, role: Role): boolean {
   switch (role) {
-    case 'support': return ticketsPerMonth(state) > ticketCapacityPerMonth(state) * 1.1;
+    case 'support': return ticketsPerMonth(state) > ticketCapacityPerMonth(state);
     case 'sales': return state.prospects.length > Math.max(1, salesCapacityPerMonth(state));
     default: return false;
   }

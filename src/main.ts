@@ -9,7 +9,7 @@ import { createCards } from './ui/cards';
 import { createController } from './ui/controller';
 import type { ShellController, Tone } from './ui/controller';
 import { createHud } from './ui/hud';
-import { booksSheet } from './ui/panels/books';
+import { BOOKS_VALUATION_TAB, booksSheet } from './ui/panels/books';
 import { buildSheet } from './ui/panels/build';
 import { createDebugDrawer } from './ui/panels/debug';
 import { h } from './ui/panels/dom';
@@ -93,6 +93,7 @@ function mountGame(opts: StartOptions): Mounted {
 
   const hud = createHud(controller, {
     onBooks: () => sheets.toggle(booksSheet(controller)),
+    onValue: () => sheets.toggle(booksSheet(controller), BOOKS_VALUATION_TAB),
     onGear: () => sheets.toggle(settingsSheet(controller, { onNewGame: showStart, onLeaderboard: () => sheets.open(leaderboardSheet()) })),
   });
   const debug = createDebugDrawer(controller, hud);

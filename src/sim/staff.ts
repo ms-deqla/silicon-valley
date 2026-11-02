@@ -46,6 +46,8 @@ function pitchFor(role: Role, archetype: Archetype, skill: number, quirk: Quirk)
     if (role === 'sales') parts.push(`Takes ${Math.round(P.starCommission * 100)}% commission on enterprise deals.`);
     if (quirk !== 'diva') parts.push(`Expects a raise every ${P.divaRaiseEveryMonths} months.`);
   }
+  // DESIGN.md 8: researchers are paid like seniors; say so on every card that is not a senior's
+  if (role === 'rnd' && archetype !== 'senior') parts.push('Researchers are paid at the senior rate.');
   return parts.join(' ');
 }
 
@@ -58,7 +60,9 @@ export function generateCandidates(state: GameState, role: Role): Candidate[] {
     const archetype = pickWeighted(state.rng, ARCHETYPES, weights);
     const [lo, hi] = P.skill[archetype];
     const skill = round1(randRange(state.rng, lo, hi));
-    const salary = round100(P.salaries[archetype] * randRange(state.rng, 1 - P.salaryNoise, 1 + P.salaryNoise));
+    // DESIGN.md 8: researchers are paid like seniors, whatever archetype they come as
+    const band = role === 'rnd' ? P.salaries.senior : P.salaries[archetype];
+    const salary = round100(band * randRange(state.rng, 1 - P.salaryNoise, 1 + P.salaryNoise));
     const quirk = pick(state.rng, QUIRKS);
     const name = `${pick(state.rng, FIRST_NAMES)} ${pick(state.rng, LAST_NAMES)}`;
     out.push({ id: `c${state.nextId++}`, name, role, archetype, quirk, skill, salary, pitch: pitchFor(role, archetype, skill, quirk) });
