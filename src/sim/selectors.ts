@@ -149,8 +149,9 @@ export function serversOwned(state: GameState): number {
   return assetsOfKind(state, 'server').length;
 }
 
+/** DESIGN.md 7: one server per 50 customers, the first one needed at 50 (not at the first customer). */
 export function serversNeeded(state: GameState): number {
-  return Math.ceil(state.customers.length / CONFIG.assets.customersPerServer);
+  return Math.floor(state.customers.length / CONFIG.assets.customersPerServer);
 }
 
 export function serversShort(state: GameState): number {

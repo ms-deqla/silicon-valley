@@ -33,7 +33,7 @@ export function investSheet(controller: ShellController, hooks: InvestHooks): Sh
       const row = h('div', { class: 'card-row asset' },
         h('div', { class: 'row-head' }, h('b', { text: card.label }), h('b', { text: money(card.price) })),
         h('div', { class: 'row-sub', text: card.effect }),
-        h('div', { class: 'row-sub muted', text: `−${money(card.monthlyDepreciation)}/mo depreciation · life ${card.lifeMonths / 12} y · payback ${card.paybackMonths === null ? '—' : months(card.paybackMonths)}` }));
+        h('div', { class: 'row-sub muted', text: `−${money(card.monthlyDepreciation)}/mo depreciation · life ${card.lifeMonths / 12} y · payback ${card.paybackMonths === null || card.paybackMonths > 120 ? '—' : months(card.paybackMonths)}` }));
       if (card.kind === 'desk') {
         const rooms = deskRooms(state);
         if (!deskRoomId || !rooms.some((r) => r.id === deskRoomId)) {

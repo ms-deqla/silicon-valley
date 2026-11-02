@@ -45,7 +45,7 @@ export const CONFIG = {
     } as Record<AssetKind, { price: number; lifeMonths: number; label: string }>,
     /** resale = this × book value; the rest is a disposal loss */
     resaleOfBook: 0.6,
-    /** servers: one per this many customers */
+    /** servers: one per this many customers; needed = floor(customers ÷ this), so the first is due at 50 */
     customersPerServer: 50,
     /** monthly chance of an outage per missing server (rolled at close) */
     outageChancePerMissingServer: 0.10,

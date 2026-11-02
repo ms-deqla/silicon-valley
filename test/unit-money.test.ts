@@ -840,10 +840,11 @@ describe('hint line', () => {
     expect(hintLine(s)).toBe('Ada has no laptop and works at half speed.');
     rep.hasLaptop = true;
 
-    s.customers.push(smb(s));
+    for (let i = 0; i < CONFIG.assets.customersPerServer; i++) s.customers.push(smb(s));
     expect(selectors.serversShort(s)).toBe(1);
     expect(hintLine(s)).toBe('Servers are short: outage risk every month.');
     s.assets.push({ id: 'srv', kind: 'server', cost: 20_000, bookValue: 20_000, lifeMonths: 48, boughtDay: 0, roomId: null });
+    s.customers.length = 0; // the runway step below assumes no subscription income
 
     rep.baseSalary = 20_000;
     const runway = selectors.runwayMonths(s);

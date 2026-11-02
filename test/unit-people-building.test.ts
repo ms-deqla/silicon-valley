@@ -520,7 +520,7 @@ describe('assets (DESIGN 7)', () => {
 
   it('the server card estimates the outage cost only while servers are short', () => {
     const s = game();
-    addSmbCustomers(s, A.customersPerServer + 1);
+    addSmbCustomers(s, 2 * A.customersPerServer);
     expect(S.serversShort(s)).toBe(2);
     const revenue = s.customers.reduce((sum, c) => sum + c.monthlyPrice, 0);
     const card = assets.catalogue(s).find((c) => c.kind === 'server');

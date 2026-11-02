@@ -28,6 +28,11 @@ function clamp(x: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, x));
 }
 
+/** "an engineer", "a marketer". */
+function withArticle(word: string): string {
+  return `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`;
+}
+
 export function founderOf(state: GameState): Person | undefined {
   return state.people.find((p) => p.founder);
 }
@@ -90,7 +95,7 @@ export function canHire(state: GameState, candidateId: string): Verdict {
   const found = findCandidate(state, candidateId);
   if (!found) return no('That candidate is no longer available.');
   const c = found.candidate;
-  if (!S.seatFor(state, c.role)) return no(`No free desk for a ${JOB_WORD[c.role]}: add a desk or open a ${ROLE_LABEL[c.role]} room.`);
+  if (!S.seatFor(state, c.role)) return no(`No free desk for ${withArticle(JOB_WORD[c.role])}: add a desk or open a ${ROLE_LABEL[c.role]} room.`);
   if (state.cash < c.salary) return no(`Not enough cash for the first month's salary (${fmtMoney(c.salary)}).`);
   return OK;
 }
@@ -228,7 +233,7 @@ export function canSetFounderRole(state: GameState, role: 'product' | 'sales'): 
   if (!f) return no('There is no founder to reassign.');
   if (state.founderRole === role) return no(`You already work in ${ROLE_LABEL[role]}.`);
   if (founderNeedsNewSeat(state, f, role) && !S.seatFor(state, role)) {
-    return no(`No free desk for a ${JOB_WORD[role]}: add a desk or open a ${ROLE_LABEL[role]} room.`);
+    return no(`No free desk for ${withArticle(JOB_WORD[role])}: add a desk or open a ${ROLE_LABEL[role]} room.`);
   }
   return OK;
 }

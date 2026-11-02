@@ -98,7 +98,7 @@ Buttons: Hire blue, Build amber, Invest green, Sell purple (frame 2 of the conce
 |-------------|--------|------|--------|
 | desk        | $1k    | 5y   | +1 seat in a room (needs free capacity) |
 | laptop      | $2k    | 3y   | one per person, else that person works at 50% |
-| server      | $20k   | 4y   | 1 per 50 customers; each missing server = 10%/month outage chance |
+| server      | $20k   | 4y   | 1 per 50 customers (needed = floor(customers ÷ 50), the first at 50); each missing server = 10%/month outage chance |
 | coffee      | $5k    | 5y   | +10 morale for everyone, fixes "coffee" quirk |
 | demoRoom    | $40k   | 10y  | enterprise deals ×1.3; occupies a 2×2 block |
 | secondFloor | $150k  | 20y  | adds floor 1 (another 6×8 grid) |
@@ -130,7 +130,7 @@ and a payback estimate (price ÷ estimated monthly cash benefit).
   months if served ≥ 50% of their tickets, else they leave.
 - Churn (SMB, daily hazard from a monthly rate) = 2% + 6% × share of tickets
   unserved. Tickets = 0.3 per customer per month; an agent serves 15 × output.
-- Servers: customers ÷ 50 rounded up needed; shortfall drives outage risk (section 11).
+- Servers: floor(customers ÷ 50) needed, so the first server is due at 50 customers; shortfall drives outage risk (section 11).
 - Features: feature points accumulate at Σ engineer output per month; a feature
   ships when points ≥ 4 + features shipped. Price and conversion use the feature
   count. R&D tier multiplier: tier 1 ×1, tier 2 ×1.5, tier 3 ×2.25.

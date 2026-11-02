@@ -236,7 +236,7 @@ describe('events: eligibility and weights', () => {
   it('outage needs a customer and is weighted up when servers are short', () => {
     const s = game();
     expect(events.eventWeights(s).outage).toBe(0);
-    addSmbCustomers(s, 10);
+    addSmbCustomers(s, CONFIG.assets.customersPerServer);
     expect(S.serversShort(s)).toBe(1);
     expect(events.eventWeights(s).outage).toBe(E.outageShortWeight);
     addServer(s);
@@ -291,7 +291,7 @@ describe('events: eligibility and weights', () => {
   it('short servers make outages much likelier', () => {
     const draws = (short: boolean): number => {
       const s = game(21);
-      addSmbCustomers(s, 10);
+      addSmbCustomers(s, CONFIG.assets.customersPerServer);
       if (!short) addServer(s);
       let outages = 0;
       for (let i = 0; i < 400; i++) {
