@@ -45,7 +45,8 @@ function sparkPaths(values: number[]): { line: string; area: string; up: boolean
   let line = '';
   for (let i = 0; i < pts.length; i++) line += `${i === 0 ? 'M' : 'L'}${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`;
   const area = `${line}L${xs[xs.length - 1].toFixed(1)} ${SPARK_H}L${xs[0].toFixed(1)} ${SPARK_H}Z`;
-  return { line, area, up: pts[pts.length - 1] >= pts[0] };
+  // a move under 1% (depreciation nibbling at the floor) is flat, not a fall
+  return { line, area, up: pts[pts.length - 1] >= pts[0] * 0.99 };
 }
 
 export function createHud(controller: ShellController, hooks: HudHooks): Hud {
