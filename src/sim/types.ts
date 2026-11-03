@@ -254,6 +254,8 @@ export interface Valuation {
   /** equity value from operations only: max(0, dcf + cash − debt); what investors size offers on */
   operating: number;
   floor: number;
+  /** the team part of the floor: min(Σ skill × acquihirePerSkill, acquihireCap) */
+  acquihire: number;
   /** required return, annual */
   r: number;
   premia: Premia;
@@ -314,6 +316,8 @@ export interface Schedule {
   crisisKnockGiven: boolean;
   /** cash was < 0 at a close while a card was open: re-check after the card */
   pendingSolvencyCheck: boolean;
+  /** investor cards opened so far, any kind */
+  knocks: number;
 }
 
 // ---------------------------------------------------------------- visuals & log

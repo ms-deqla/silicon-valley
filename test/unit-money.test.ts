@@ -263,33 +263,38 @@ describe('valuation', () => {
     expect(computeValuation(s).runRate).toBeCloseTo(1_000 + 20_000 - 2_000 - 500, 6);
   });
 
-  it('growth comes from trailing revenue, scaled by trust, and is clamped', () => {
-    // fewer than 3 closed months: no window → 0
-    const young = createGame(1);
-    for (let m = 0; m < 2; m++) young.history.push(closedMonth(young, m, { revenue: 10_000 * (m + 1), fcf: 1_000 }));
-    expect(computeValuation(young).growth).toBe(0);
+  it('growth compares smoothed revenues across the window, scaled by trust, and is clamped', () => {
+    const n = V.growthSmoothMonths;
+    const avg = (base: number, rate: number, from: number): number => {
+      let sum = 0;
+      for (let m = from; m < from + n; m++) sum += base * Math.pow(rate, m);
+      return sum / n;
+    };
+    const build = (base: number, rate: number, months: number): ReturnType<typeof createGame> => {
+      const g = createGame(1);
+      for (let m = 0; m < months; m++) g.history.push(closedMonth(g, m, { revenue: base * Math.pow(rate, m), fcf: 1_000 }));
+      return g;
+    };
 
-    // a material base over a full 6-month window at +10%/month → clamped to growthMax
-    const rising = createGame(1);
-    for (let m = 0; m < 7; m++) rising.history.push(closedMonth(rising, m, { revenue: 20_000 * Math.pow(1.1, m), fcf: 1_000 }));
-    expect(computeValuation(rising).growth).toBeCloseTo(V.growthMax, 10);
+    // too little history for a window → 0
+    expect(computeValuation(build(10_000, 1.5, n + V.growthMinLagMonths - 1)).growth).toBe(0);
+
+    // a material base over a full window at +10%/month → clamped to growthMax
+    expect(computeValuation(build(20_000, 1.1, n + V.growthWindowMonths + 1)).growth).toBeCloseTo(V.growthMax, 10);
 
     // the same growth on a tiny base is barely trusted
-    const tiny = createGame(1);
-    for (let m = 0; m < 7; m++) tiny.history.push(closedMonth(tiny, m, { revenue: 500 * Math.pow(1.1, m), fcf: 100 }));
-    const tinyLast = 500 * Math.pow(1.1, 6);
-    expect(computeValuation(tiny).growth).toBeCloseTo(0.1 * (tinyLast / V.growthTrustRevenue), 6);
+    const tinyMonths = n + V.growthWindowMonths + 1;
+    const tinyLast = avg(500, 1.1, tinyMonths - n);
+    expect(computeValuation(build(500, 1.1, tinyMonths)).growth).toBeCloseTo(0.1 * (tinyLast / V.growthTrustRevenue), 6);
 
     // a short window is trusted in proportion to its length
-    const short = createGame(1);
-    for (const rev of [10_000, 11_000, 12_000, 13_310]) short.history.push(closedMonth(short, short.history.length, { revenue: rev, fcf: 1_000 }));
-    const expectedShort = 0.1 * Math.min(1, 13_310 / V.growthTrustRevenue) * (3 / V.growthWindowMonths);
-    expect(computeValuation(short).growth).toBeCloseTo(expectedShort, 6);
+    const shortMonths = n + 4;
+    const shortLast = avg(10_000, 1.03, shortMonths - n);
+    const expectedShort = 0.03 * Math.min(1, shortLast / V.growthTrustRevenue) * (4 / V.growthWindowMonths);
+    expect(computeValuation(build(10_000, 1.03, shortMonths)).growth).toBeCloseTo(expectedShort, 6);
 
     // falling revenue is negative, clamped at growthMin
-    const falling = createGame(1);
-    for (let m = 0; m < 7; m++) falling.history.push(closedMonth(falling, m, { revenue: 200_000 * Math.pow(0.8, m), fcf: 1_000 }));
-    expect(computeValuation(falling).growth).toBeCloseTo(V.growthMin, 10);
+    expect(computeValuation(build(200_000, 0.8, n + V.growthWindowMonths + 1)).growth).toBeCloseTo(V.growthMin, 10);
   });
 
   it('negative flows fall back to the floor, never below zero', () => {
@@ -489,6 +494,7 @@ describe('capital: knocks and equity', () => {
 
   it('desperation knock fires when runway < 2 months and respects the cooldown', () => {
     const s = createGame(1);
+    s.schedule.knocks = 1; // DESIGN.md 10: no lifeline before investors have knocked once on their own schedule
     s.people.push(person(s, 'product', 3, 28_000)); // runway 50/28 ≈ 1.8 months
     expect(selectors.runwayMonths(s)).toBeLessThan(C.desperationRunwayMonths);
     advanceDay(s);
@@ -828,7 +834,7 @@ describe('hint line', () => {
     expect(hintLine(s)).toBe('An enterprise prospect is waiting in the lobby. Put yourself on sales or hire a rep.');
 
     s.founderRole = 'sales';
-    expect(hintLine(s)).toBe('Watch Profit and Cash flow disagree, then open Books to see why.');
+    expect(hintLine(s)).toBe('Nothing owed and nothing bought yet, so the bars agree. Sign an enterprise deal and watch them split.');
 
     const founder = s.people[0];
     founder.hasLaptop = false;
@@ -850,7 +856,7 @@ describe('hint line', () => {
     const runway = selectors.runwayMonths(s);
     expect(runway).not.toBeNull();
     expect(runway).toBeLessThan(3);
-    expect(hintLine(s)).toBe(`Runway: ${runway?.toFixed(1)} months. Raise money or cut costs.`);
+    expect(hintLine(s)).toBe(`Runway: ${runway?.toFixed(1)} months. Cut costs; investors knock on their own schedule.`);
     rep.baseSalary = 7_000;
 
     rep.raisePending = true;

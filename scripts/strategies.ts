@@ -12,7 +12,7 @@
  * asked again on the same day, so every strategy answers open cards first.
  */
 import { ASSET_KINDS, CONFIG, ROLES, advanceDay, canDispatch, createGame, dispatch, selectors as S, validSpots } from '../src/sim';
-import type { Action, Candidate, Card, CardChoice, GameState, MonthBook, Person, Role, RoomSize } from '../src/sim';
+import type { Action, Candidate, Card, CardChoice, CardKind, GameState, MonthBook, Person, Role, RoomSize } from '../src/sim';
 
 export type Strategy = { name: string; act(state: GameState): Action[] };
 
@@ -99,6 +99,19 @@ function runwayWith(state: GameState, extraMonthly = 0): number {
   return c <= 0 ? Number.POSITIVE_INFINITY : state.cash / c;
 }
 
+/** Today's net burn: costs minus subscription income, the run-rate the HUD's runway reads before any close (selectors.monthlyBurn). */
+function netBurn(state: GameState): number {
+  let smb = 0;
+  for (const c of state.customers) if (c.kind === 'smb') smb += c.monthlyPrice;
+  return monthlyCost(state) - smb;
+}
+
+/** Months of cash after adding `extraMonthly` of cost at today's net burn; infinite while the company stays cash-positive. */
+function runwayAfter(state: GameState, extraMonthly = 0): number {
+  const b = netBurn(state) + extraMonthly;
+  return b <= 0 ? Number.POSITIVE_INFINITY : state.cash / b;
+}
+
 /** Hired staff in a role (the founder is not counted even while playing that role). */
 const hired = (state: GameState, role: Role): number => S.peopleIn(state, role).filter((p) => !p.founder).length;
 
@@ -120,19 +133,29 @@ const bySalary: Chooser = (c) => [...c].sort((a, b) => a.salary - b.salary)[0];
 const byValue: Chooser = (c) => [...c].sort((a, b) => b.skill / b.salary - a.skill / a.salary)[0];
 const SENIORITY: Record<Candidate['archetype'], number> = { junior: 0, mid: 1, senior: 2, star: 3 };
 const bySeniority: Chooser = (c) => [...c].sort((a, b) => SENIORITY[b.archetype] - SENIORITY[a.archetype] || b.skill - a.skill)[0];
+/** The cheapest junior on the board this month, if any (candidates refresh at month end). */
+const cheapestJunior: Chooser = (c) => bySalary(c.filter((x) => x.archetype === 'junior'));
 
 const roomFull = (state: GameState, roomId: string, max: number): boolean => S.desksIn(state, roomId).length >= max;
 
 /**
- * One step toward one more hire in `role`: hire when a seat exists, else add a
- * desk to a department room with spare capacity, else open a room of `size`.
+ * One step toward one more hire in `role`: hire when a seat exists, else add a desk (to the
+ * garage first when `garage` is set: DESIGN.md 5, the garage seats two of any role rent-free),
+ * else to a department room with spare capacity, else open a room of `size`.
  * Returns at most one action (DESIGN.md 6: hiring needs a free desk in that role's room or the garage).
  */
-function hireStep(state: GameState, role: Role, choose: Chooser, size: RoomSize, affordable: (c: Candidate) => boolean): Action | null {
+function hireStep(state: GameState, role: Role, choose: Chooser, size: RoomSize, affordable: (c: Candidate) => boolean, garage = false): Action | null {
   const cand = choose(state.candidates[role].filter(affordable));
   if (!cand) return null;
   const hire: Action = { type: 'hire', candidateId: cand.id };
   if (ok(state, hire)) return hire;
+  if (garage) {
+    for (const g of S.roomsOf(state, 'garage')) {
+      if (roomFull(state, g.id, S.roomMaxDesks(g))) continue;
+      const desk: Action = { type: 'buyAsset', kind: 'desk', roomId: g.id };
+      if (ok(state, desk)) return desk;
+    }
+  }
   const rooms = S.roomsOf(state, role);
   for (const room of rooms) {
     if (roomFull(state, room.id, S.roomMaxDesks(room))) continue;
@@ -141,6 +164,19 @@ function hireStep(state: GameState, role: Role, choose: Chooser, size: RoomSize,
   }
   if (rooms.every((room) => roomFull(state, room.id, S.roomMaxDesks(room)))) return firstSpot(state, role, size);
   return null;
+}
+
+/**
+ * Open a `size` room for `role` when its rent plus the cheapest candidate's salary (the hire that
+ * follows) still leaves `runway` months in the bank by the `months` measure (cost run-rate by
+ * default, net burn for the balanced player). Null when the room exists already.
+ */
+function roomStep(state: GameState, role: Role, size: RoomSize, runway: number, months: (state: GameState, extra: number) => number = runwayWith): Action | null {
+  if (S.hasRoom(state, role)) return null;
+  const cheapest = bySalary(state.candidates[role]);
+  const salary = cheapest ? cheapest.salary : CONFIG.people.salaries.junior;
+  if (months(state, CONFIG.rooms.size[size].rent + salary) <= runway) return null;
+  return firstSpot(state, role, size);
 }
 
 /** Everyone works at 50% without a laptop (DESIGN.md 6); buy one when nobody has a spare to hand out. */
@@ -174,6 +210,30 @@ function adStep(state: GameState, amount: number): Action | null {
   return okOrNull(state, { type: 'setAdBudget', amount });
 }
 
+/** The founder works in `role` (DESIGN.md 6: a free generalist assignable to product or sales). */
+function founderStep(state: GameState, role: 'product' | 'sales'): Action | null {
+  if (state.founderRole === role) return null;
+  return okOrNull(state, { type: 'founderRole', role });
+}
+
+/** Has an enterprise deal ever been signed? The first invoice is issued at the first signing (DESIGN.md 8). */
+const firstDealSigned = (state: GameState): boolean => state.invoices.length > 0;
+
+/**
+ * Event answers a sensible human gives (DESIGN.md 11): pay for the fix or the PR push only when two
+ * months of costs stay in the bank afterwards; wait for a late payer; out-build a competitor; keep a
+ * poached senior; hold the line in a recession (morale is worth more than 10% of salaries).
+ */
+function sensibleEvent(state: GameState, card: Card): number {
+  const cushion = monthlyCost(state) * 2;
+  switch (card.eventType) {
+    case 'outage': return state.cash - CONFIG.events.outageFix > cushion ? 0 : 1;
+    case 'press': return state.cash - CONFIG.events.prPush > cushion ? 0 : 1;
+    case 'recession': return 1;
+    default: return 0;
+  }
+}
+
 // ---------------------------------------------------------------- the five strategies
 
 /** Never acts: the founder codes alone in the garage. Declines investors; picks the no-cash event option. */
@@ -189,49 +249,84 @@ export const idle: Strategy = {
   },
 };
 
-/** A small product room, then the cheapest engineer whenever three months of costs are covered. First equity knock accepted. */
+/** Tunables of the engineer-first and sales-first strategies (strategy taste, not sim rules). */
+export const FOCUSED = {
+  /** months of costs that must stay covered after a hire or a room */
+  buildRunway: 3,
+  /** engineer-first: the founder moves to sales once this many features exist */
+  sellFromFeatures: 3,
+  /** engineer-first: a support agent from this many customers */
+  supportFromCustomers: 30,
+  /** engineer-first: takes this many knocks (scheduled or desperation), then declines */
+  knocksTaken: 2,
+  /** sales-first: the junior engineer is hired from this day (month 2) */
+  engineerFromDay: CONFIG.time.daysPerMonth,
+};
+
+/**
+ * A product person: a small product room with one engineer, desks and laptops for everyone, the
+ * founder codes until three features exist and then sells, the first two knocks of any kind are
+ * taken, a support agent arrives at thirty customers. No marketing, ever.
+ */
 export const engineerFirst: Strategy = {
   name: 'engineerFirst',
   act(state) {
     const card = answerCard(state, {
-      knock: (s) => (s.rounds.length === 0 ? 'equity' : 'decline'),
-      event: () => 0,
+      knock: (s) => (s.rounds.length < FOCUSED.knocksTaken ? 'equity' : 'decline'),
+      event: sensibleEvent,
     });
     if (card) return [card];
     const out: Action[] = [];
     const push = (a: Action | null): void => { if (a) out.push(a); };
-    if (!S.hasRoom(state, 'product')) {
-      push(firstSpot(state, 'product', 'small'));
-      return out;
-    }
+    const afford = (c: Candidate): boolean => runwayWith(state, c.salary) > FOCUSED.buildRunway;
+
+    push(founderStep(state, state.features >= FOCUSED.sellFromFeatures ? 'sales' : 'product'));
     push(laptopStep(state));
-    out.push(...raiseSteps(state, (s) => runwayWith(s) > 3));
-    push(hireStep(state, 'product', bySalary, 'small', (c) => runwayWith(state, c.salary) > 3));
+    out.push(...raiseSteps(state, (s) => runwayWith(s) > FOCUSED.buildRunway));
+    push(serverStep(state, 1.5));
+
+    const build = (): Action | null => {
+      if (!S.hasRoom(state, 'product')) return roomStep(state, 'product', 'small', FOCUSED.buildRunway);
+      if (hired(state, 'product') < 1) return hireStep(state, 'product', byValue, 'small', afford);
+      if (state.customers.length >= FOCUSED.supportFromCustomers && hired(state, 'support') < 1) {
+        return hireStep(state, 'support', byValue, 'small', afford);
+      }
+      return null;
+    };
+    push(build());
     return out;
   },
 };
 
-/** Founder on sales from day 1; a rep as soon as possible, then support, then more of whichever is thinner. */
+/**
+ * A sales person: the founder sells from day 1 and keeps the product moving with one junior
+ * engineer at the second garage desk from month 2; after the first signed deal a small sales
+ * room and a rep; every knock taken.
+ */
 export const salesFirst: Strategy = {
   name: 'salesFirst',
   act(state) {
-    const card = answerCard(state, {
-      knock: (s) => (runwayWith(s) < 6 ? 'equity' : 'decline'),
-      event: () => 0,
-    });
+    const card = answerCard(state, { knock: () => 'equity', event: sensibleEvent });
     if (card) return [card];
     const out: Action[] = [];
     const push = (a: Action | null): void => { if (a) out.push(a); };
-    if (state.founderRole !== 'sales') push(okOrNull(state, { type: 'founderRole', role: 'sales' }));
+    const afford = (c: Candidate): boolean => runwayWith(state, c.salary) > FOCUSED.buildRunway;
+
+    push(founderStep(state, 'sales'));
     push(laptopStep(state));
-    out.push(...raiseSteps(state, (s) => runwayWith(s) > 3));
-    const afford = (months: number) => (c: Candidate): boolean => runwayWith(state, c.salary) > months;
-    if (hired(state, 'sales') === 0) push(hireStep(state, 'sales', bySalary, 'small', afford(3)));
-    else if (hired(state, 'support') === 0) push(hireStep(state, 'support', bySalary, 'small', afford(3)));
-    else if (runwayWith(state) > 6) {
-      const role: Role = hired(state, 'sales') <= hired(state, 'support') ? 'sales' : 'support';
-      push(hireStep(state, role, byValue, 'small', afford(6)));
-    }
+    out.push(...raiseSteps(state, (s) => runwayWith(s) > FOCUSED.buildRunway));
+    push(serverStep(state, 1.5));
+
+    const build = (): Action | null => {
+      if (hired(state, 'product') < 1) {
+        return state.day >= FOCUSED.engineerFromDay ? hireStep(state, 'product', cheapestJunior, 'small', afford, true) : null;
+      }
+      if (!firstDealSigned(state)) return null;
+      if (!S.hasRoom(state, 'sales')) return roomStep(state, 'sales', 'small', FOCUSED.buildRunway);
+      if (hired(state, 'sales') < 1) return hireStep(state, 'sales', byValue, 'small', afford);
+      return null;
+    };
+    push(build());
     return out;
   },
 };
@@ -241,64 +336,94 @@ export const BALANCED = {
   adBudget: 5_000,
   coffeeCash: 60_000,
   rndCash: 150_000,
-  /** months of costs that must stay covered after a hire or a room */
-  buildRunway: 3,
+  /** months of runway (cash ÷ net burn, as the HUD reads it) that must remain after a hire, a room or the ad budget */
+  buildRunway: 5,
+  /** the first rep is hired at this runway while prospects wait (a deal in the lobby is worth a thinner cushion) */
+  repRunway: 4,
+  /** with this many prospects waiting, no rep and a round in the bank, the rep comes before the marketing room */
+  repBeforeMarketingProspects: 2,
   growRunway: 6,
   supportServedMin: 0.85,
+  /** the first support agent from this many customers (tickets exist: DESIGN.md 8) */
+  supportFromCustomers: 10,
+  /** the founder pitches waiting prospects from this many features (close probability needs features) */
+  sellFromFeatures: 3,
+  /** a scheduled knock is taken while burning with less than this many months of runway... */
+  raiseBelowRunway: 12,
+  /** ...or with less than this many months of costs in the bank; a desperation knock is always taken */
+  raiseBelowCostMonths: 6,
 };
 
-function balancedEvent(state: GameState, card: Card): number {
-  const cushion = monthlyCost(state) * 2;
-  switch (card.eventType) {
-    case 'outage': return state.cash - CONFIG.events.outageFix > cushion ? 0 : 1; // emergency fix when affordable
-    case 'press': return state.cash - CONFIG.events.prPush > cushion ? 0 : 1; // PR push when affordable
-    case 'recession': return 1; // hold the line: morale is worth more than 10% of salaries
-    default: return 0; // wait / out-build / counter-offer
-  }
+/**
+ * DESIGN.md 10: a desperation knock means the runway is under two months, so the money is taken.
+ * A scheduled knock is taken while the company burns with under a year of runway or holds under
+ * six months of costs; a profitable company with cash in the bank keeps its equity.
+ */
+function balancedKnock(state: GameState, card: Card): KnockWant {
+  if (card.kind === 'desperation') return 'equity';
+  const runway = S.runwayMonths(state);
+  if (runway !== null && runway < BALANCED.raiseBelowRunway) return 'equity';
+  if (runwayWith(state) < BALANCED.raiseBelowCostMonths) return 'equity';
+  return 'decline';
 }
 
 /**
- * Product room + engineer, then marketing with $5k ads, then sales, then support,
- * servers when short, coffee once cash > $60k, equity knocks taken, finance room
- * once unlocked, nothing ever sold. Growth after that is demand-led.
+ * A junior engineer at the second garage desk on day 1 (no rent until the first money comes in),
+ * marketing with $5k of ads once rent and a marketer leave five months of runway (in practice
+ * after the first knock); the first rep comes before marketing once a round is in the bank and
+ * two prospects queue in the lobby (at a four-month cushion: a deal in the lobby is worth the
+ * bet), else after the marketer; the founder pitches while more prospects wait than the hired
+ * reps can work; support from ten customers, finance once unlocked, servers when short, coffee
+ * once cash > $60k, nothing ever sold. Growth after that is demand-led. Every spend is gated on
+ * the runway the HUD shows (cash ÷ net burn), the number a careful founder watches. Knocks per
+ * balancedKnock; events per sensibleEvent.
  */
 export const balanced: Strategy = {
   name: 'balanced',
   act(state) {
-    const card = answerCard(state, { knock: () => 'equity', event: balancedEvent });
+    const card = answerCard(state, { knock: balancedKnock, event: sensibleEvent });
     if (card) return [card];
     const out: Action[] = [];
     const push = (a: Action | null): void => { if (a) out.push(a); };
-    const afford = (months: number) => (c: Candidate): boolean => runwayWith(state, c.salary) > months;
+    const afford = (months: number) => (c: Candidate): boolean => runwayAfter(state, c.salary) > months;
+
+    // the founder sells while more prospects wait than the hired reps can work in a month (none hired: any
+    // prospect; DESIGN.md 8: a rep works output × 0.5 deals a month), else codes
+    let repCapacity = 0;
+    for (const p of S.peopleIn(state, 'sales')) if (!p.founder) repCapacity += CONFIG.customers.dealsPerRepOutput * S.outputOf(state, p);
+    const pitch = state.prospects.length > repCapacity && state.features >= BALANCED.sellFromFeatures;
+    push(founderStep(state, pitch ? 'sales' : 'product'));
 
     // maintenance that can share a day with a build step
     push(laptopStep(state));
-    out.push(...raiseSteps(state, (s) => runwayWith(s) > BALANCED.buildRunway));
-    push(adStep(state, runwayWith(state, BALANCED.adBudget - state.adBudget) > BALANCED.buildRunway ? BALANCED.adBudget : 0));
+    out.push(...raiseSteps(state, (s) => runwayAfter(s) > BALANCED.buildRunway));
+    push(adStep(state, runwayAfter(state, BALANCED.adBudget - state.adBudget) > BALANCED.buildRunway ? BALANCED.adBudget : 0));
     push(serverStep(state, 1.5));
     if (!S.hasCoffee(state) && state.cash > BALANCED.coffeeCash) push(okOrNull(state, { type: 'buyAsset', kind: 'coffee' }));
 
     // one build step per day, in order
     const build = (): Action | null => {
-      if (!S.hasRoom(state, 'product')) return firstSpot(state, 'product', 'small');
-      if (hired(state, 'product') < 1) return hireStep(state, 'product', byValue, 'small', afford(BALANCED.buildRunway));
-      if (!S.hasRoom(state, 'marketing')) {
-        return runwayWith(state, CONFIG.rooms.size.small.rent) > BALANCED.buildRunway ? firstSpot(state, 'marketing', 'small') : null;
+      if (hired(state, 'product') < 1) return hireStep(state, 'product', bySalary, 'small', afford(BALANCED.buildRunway), true);
+      // the first rep: before marketing once a round is in the bank and prospects queue, else after the marketer
+      const repWanted = hired(state, 'sales') < 1 && state.prospects.length > 0;
+      if (repWanted && state.rounds.length > 0 && state.prospects.length >= BALANCED.repBeforeMarketingProspects) {
+        return hireStep(state, 'sales', byValue, 'small', afford(BALANCED.repRunway));
       }
-      if (hired(state, 'marketing') < 1) return hireStep(state, 'marketing', byValue, 'small', afford(BALANCED.buildRunway));
-      if (hired(state, 'sales') < 1) return hireStep(state, 'sales', byValue, 'small', afford(BALANCED.buildRunway));
-      if (hired(state, 'support') < 1) return hireStep(state, 'support', byValue, 'small', afford(BALANCED.buildRunway));
-      if (state.financeUnlocked && !S.hasRoom(state, 'finance')) {
-        return runwayWith(state, CONFIG.rooms.size.small.rent) > BALANCED.buildRunway ? firstSpot(state, 'finance', 'small') : null;
+      if (!S.hasRoom(state, 'marketing')) return roomStep(state, 'marketing', 'small', BALANCED.buildRunway, runwayAfter);
+      if (hired(state, 'marketing') < 1) return hireStep(state, 'marketing', bySalary, 'small', afford(BALANCED.buildRunway));
+      if (repWanted) return hireStep(state, 'sales', byValue, 'small', afford(BALANCED.repRunway));
+      if (hired(state, 'support') < 1 && state.customers.length >= BALANCED.supportFromCustomers) {
+        return hireStep(state, 'support', byValue, 'small', afford(BALANCED.buildRunway));
       }
+      if (state.financeUnlocked && !S.hasRoom(state, 'finance')) return roomStep(state, 'finance', 'small', BALANCED.buildRunway, runwayAfter);
       if (state.financeUnlocked && hired(state, 'finance') < 1) return hireStep(state, 'finance', bySalary, 'small', afford(BALANCED.buildRunway + 1));
       // growth, demand-led
-      if (runwayWith(state) <= BALANCED.growRunway) return null;
+      if (runwayAfter(state) <= BALANCED.growRunway) return null;
       const grow = afford(BALANCED.growRunway);
       if (S.servedShareNow(state) < BALANCED.supportServedMin) return hireStep(state, 'support', byValue, 'small', grow);
       if (state.prospects.length > S.salesCapacityPerMonth(state)) return hireStep(state, 'sales', byValue, 'small', grow);
       if (hired(state, 'product') < 3) return hireStep(state, 'product', byValue, 'small', grow);
-      if (hired(state, 'marketing') < 2 && runwayWith(state) > BALANCED.growRunway * 1.5) return hireStep(state, 'marketing', byValue, 'small', afford(BALANCED.growRunway * 1.5));
+      if (hired(state, 'marketing') < 2 && runwayAfter(state) > BALANCED.growRunway * 1.5) return hireStep(state, 'marketing', byValue, 'small', afford(BALANCED.growRunway * 1.5));
       if (hired(state, 'rnd') < 1 && state.cash > BALANCED.rndCash) return hireStep(state, 'rnd', byValue, 'small', afford(BALANCED.growRunway * 2));
       return null;
     };
@@ -489,9 +614,27 @@ export interface RunOptions {
   stallLimit?: number;
 }
 
+/** Pacing milestones of one run (DESIGN.md 16): the day each first happened, and the cards seen. */
+export interface Pacing {
+  /** day the first feature shipped; null when it never did */
+  firstFeatureDay: number | null;
+  /** day the first paying customer (SMB or enterprise) appeared */
+  firstCustomerDay: number | null;
+  /** day the first enterprise prospect stood in the lobby */
+  firstProspectDay: number | null;
+  /** day the first enterprise deal was signed (its invoice issued) */
+  firstDealDay: number | null;
+  /** day the first investor card of any kind opened, and which kind it was */
+  firstKnockDay: number | null;
+  firstKnockKind: 'knock' | 'desperation' | null;
+  /** cards seen, by kind */
+  cards: Record<CardKind, number>;
+}
+
 export interface RunResult {
   state: GameState;
   trace: MonthTrace[];
+  pacing: Pacing;
 }
 
 function traceOf(state: GameState, book: MonthBook): MonthTrace {
@@ -511,18 +654,51 @@ function traceOf(state: GameState, book: MonthBook): MonthTrace {
   };
 }
 
+function newPacing(): Pacing {
+  return {
+    firstFeatureDay: null,
+    firstCustomerDay: null,
+    firstProspectDay: null,
+    firstDealDay: null,
+    firstKnockDay: null,
+    firstKnockKind: null,
+    cards: { knock: 0, desperation: 0, maturity: 0, event: 0, gameOver: 0, sold: 0 },
+  };
+}
+
+/** Record the milestones visible in the state right now; `seenCards` keeps each card counted once. */
+function observePacing(state: GameState, pacing: Pacing, seenCards: Set<string>): void {
+  if (pacing.firstFeatureDay === null && state.features > 0) pacing.firstFeatureDay = state.day;
+  if (pacing.firstCustomerDay === null && state.customers.length > 0) pacing.firstCustomerDay = state.day;
+  if (pacing.firstProspectDay === null && state.prospects.length > 0) pacing.firstProspectDay = state.day;
+  if (pacing.firstDealDay === null && firstDealSigned(state)) pacing.firstDealDay = state.day;
+  const card = state.card;
+  if (card && !seenCards.has(card.id)) {
+    seenCards.add(card.id);
+    pacing.cards[card.kind] += 1;
+    if (pacing.firstKnockDay === null && (card.kind === 'knock' || card.kind === 'desperation')) {
+      pacing.firstKnockDay = card.createdDay;
+      pacing.firstKnockKind = card.kind;
+    }
+  }
+}
+
 /**
  * Play `months` months of a fresh game with `strategy`. Returns the final state
- * (status playing, gameOver or sold) and one trace row per closed month.
- * Throws when the clock stalls, i.e. a card stays unanswered.
+ * (status playing, gameOver or sold), one trace row per closed month and the pacing
+ * milestones. Throws when the clock stalls, i.e. a card stays unanswered.
  */
 export function runStrategy(seed: number, strategy: Strategy, months: number, opts: RunOptions = {}): RunResult {
   const state = createGame(seed);
   const trace: MonthTrace[] = [];
+  const pacing = newPacing();
+  const seenCards = new Set<string>();
   const targetDay = months * D;
   const stallLimit = opts.stallLimit ?? 8;
   let stalls = 0;
   while (state.status === 'playing' && state.day < targetDay) {
+    // a card opened by yesterday's tick, or by the answer to the previous card, is open now
+    observePacing(state, pacing, seenCards);
     const dayBefore = state.day;
     const closedBefore = state.history.length;
     for (const action of strategy.act(state)) {
@@ -547,5 +723,6 @@ export function runStrategy(seed: number, strategy: Strategy, months: number, op
       stalls = 0;
     }
   }
-  return { state, trace };
+  observePacing(state, pacing, seenCards);
+  return { state, trace, pacing };
 }

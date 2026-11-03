@@ -635,14 +635,15 @@ describe('product', () => {
 
   it('ships several features in one day when the backlog allows, each at its own cost', () => {
     const s = createGame(17);
-    s.featurePoints = 20; // 4 + 5 + 6 = 15 ships three; 7 does not fit
+    const c0 = S.featureCost(s);
+    s.featurePoints = c0 + (c0 + 1) + (c0 + 2) + 2; // three features fit, the fourth does not
     product.dailyProduct(s);
     expect(s.features).toBe(3);
-    expect(s.featurePoints).toBeCloseTo(5 + S.roleOutput(s, 'product') / D);
+    expect(s.featurePoints).toBeCloseTo(2 + S.roleOutput(s, 'product') / D);
     expect(visuals(s, 'feature').map((v) => v.features)).toEqual([1, 2, 3]);
   });
 
-  it('the founder alone ships features on days 48, 106 and 177', () => {
+  it('the founder alone ships features on the schedule the config implies (first by day 45)', () => {
     const s = createGame(18);
     const shipDays: number[] = [];
     for (let day = 1; day <= 200; day++) {
@@ -651,7 +652,21 @@ describe('product', () => {
       product.dailyProduct(s);
       if (s.features > before) shipDays.push(day);
     }
-    expect(shipDays).toEqual([48, 106, 177]);
+    // replay the rule: points per day from the founder's output, costs rising by one per feature
+    const perDay = S.roleOutput(createGame(18), 'product') / D;
+    const expected: number[] = [];
+    let pts = 0;
+    let cost = CONFIG.product.featureBaseCost;
+    for (let day = 1; day <= 200; day++) {
+      pts += perDay;
+      while (pts >= cost) {
+        pts -= cost;
+        cost += CONFIG.product.featureCostPerFeature;
+        expected.push(day);
+      }
+    }
+    expect(shipDays).toEqual(expected);
+    expect(shipDays[0]).toBeLessThanOrEqual(45); // DESIGN.md 16 pacing
     expect(s.tier).toBe(1);
     expect(s.researchPoints).toBe(0); // nobody in R&D
   });

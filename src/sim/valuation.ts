@@ -6,7 +6,7 @@
  * trailing growth rate and discounted at the required return r, which is the base
  * rate plus five risk premia.
  */
-import type { GameState, Premia, Valuation } from './types';
+import type { GameState, MonthBook, Premia, Valuation } from './types';
 import { CONFIG } from './config';
 import { assetsAtBook, debtOf, openReceivables, revenueOf } from './ledger';
 import * as S from './selectors';
@@ -41,13 +41,25 @@ function runRateOf(state: GameState): number {
  * few hundred dollars of revenue never forecast a rocket: trust = min(1, revenue ÷
  * growthTrustRevenue) × min(1, window ÷ growthWindowMonths). Clamped to [growthMin, growthMax].
  */
+/** Average revenue of the n closed months ending just before index `end`. */
+function averageRevenue(h: MonthBook[], end: number, n: number): number {
+  let sum = 0;
+  for (let i = end - n; i < end; i++) sum += revenueOf(h[i]);
+  return sum / n;
+}
+
+/**
+ * DESIGN.md 10: growth compares 3-month average revenues `lag` months apart (annual
+ * enterprise bookings are lumpy), scaled by the trust factor, clamped.
+ */
 function initialGrowth(state: GameState): number {
   const V = CONFIG.valuation;
   const h = state.history;
-  const lag = Math.min(V.growthWindowMonths, h.length - 1);
-  if (lag < 2) return 0;
-  const last = revenueOf(h[h.length - 1]);
-  const earlier = revenueOf(h[h.length - 1 - lag]);
+  const n = V.growthSmoothMonths;
+  const lag = Math.min(V.growthWindowMonths, h.length - n);
+  if (lag < V.growthMinLagMonths) return 0;
+  const last = averageRevenue(h, h.length, n);
+  const earlier = averageRevenue(h, h.length - lag, n);
   if (last <= 0 || earlier <= 0) return 0;
   const raw = Math.pow(last / earlier, 1 / lag) - 1;
   const trust = Math.min(1, last / V.growthTrustRevenue) * Math.min(1, lag / V.growthWindowMonths);
@@ -121,5 +133,5 @@ export function computeValuation(state: GameState): Valuation {
   const operating = Math.max(0, dcf + state.cash - debt);
   const value = Math.max(0, operating, floor);
 
-  return { value, dcf, operating, floor, r, premia, growth, runRate, runwayMonths: runway };
+  return { value, dcf, operating, floor, acquihire, r, premia, growth, runRate, runwayMonths: runway };
 }

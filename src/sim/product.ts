@@ -1,6 +1,6 @@
 /**
  * Features and R&D tiers. DESIGN.md section 8: feature points accumulate at Σ engineer
- * output per month and a feature ships when points ≥ 4 + features shipped; research
+ * output per month and a feature ships when points ≥ featureBaseCost + features shipped; research
  * points accumulate at Σ researcher output per month, tier 2 at 60 and tier 3 at 150.
  */
 import type { GameState } from './types';

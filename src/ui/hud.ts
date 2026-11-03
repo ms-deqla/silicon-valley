@@ -3,7 +3,7 @@
  * sparkline), the calendar badge, speed buttons, the gear, then the why line and the
  * hint line. DESIGN.md sections 4, 9, 13. Patched in place on every state change.
  */
-import { hintLine, ledger, selectors, whyLine } from '../sim';
+import { CONFIG, hintLine, ledger, selectors, whyLine } from '../sim';
 import type { GameState } from '../sim';
 import type { Speed } from './api';
 import type { ShellController } from './controller';
@@ -27,7 +27,7 @@ export interface HudHooks {
 }
 
 /** Points of value history drawn in the sparkline (12 months of change). */
-const SPARK_POINTS = 13;
+const SPARK_POINTS = CONFIG.valuation.historyMonths + 1;
 const SPARK_W = 64;
 const SPARK_H = 22;
 
@@ -121,7 +121,9 @@ export function createHud(controller: ShellController, hooks: HudHooks): Hud {
     fcf.value.textContent = money(f);
     tone(fcf.value, f);
     value.value.textContent = money(state.valuation.value);
-    value.el.title = `Investors want ${percent(state.valuation.r, 1)} a year. Tap for the breakdown.`;
+    value.el.title = state.valuation.floor >= state.valuation.operating
+      ? 'Floor value: cash, receivables, assets and the team. The cash-flow forecast is lower. Tap for the breakdown.'
+      : `Investors want ${percent(state.valuation.r, 1)} a year. Tap for the breakdown.`;
     const sp = sparkPaths(state.valueHistory);
     sparkLine.setAttribute('d', sp.line);
     sparkArea.setAttribute('d', sp.area);

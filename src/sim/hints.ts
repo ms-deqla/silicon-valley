@@ -61,6 +61,8 @@ function depreciationOfNewAssets(state: GameState): number {
  * DESIGN.md 13: one sentence naming the biggest item of this month's cash bridge
  * (DESIGN.md 9): receivables, capex vs depreciation, bad debt, financing.
  */
+const AGREE = 'Profit and cash agree this month.';
+
 export function whyLine(state: GameState): string {
   const book = state.book;
   const bridge = L.bridgeOf(book, L.openReceivables(state), state.cash);
@@ -91,7 +93,7 @@ export function whyLine(state: GameState): string {
 
   let best: WhyItem | null = null;
   for (const it of items) if (it.size >= WHY_MIN_ITEM && (best === null || it.size > best.size)) best = it;
-  return best ? best.text : 'Profit and cash agree this month.';
+  return best ? best.text : AGREE;
 }
 
 // ---------------------------------------------------------------- hint line
@@ -110,7 +112,7 @@ export function hintLine(state: GameState): string {
   }
   if (S.serversShort(state) > 0) return 'Servers are short: outage risk every month.';
   const runway = S.runwayMonths(state);
-  if (runway !== null && runway < LOW_RUNWAY_MONTHS) return `Runway: ${runway.toFixed(1)} months. Raise money or cut costs.`;
+  if (runway !== null && runway < LOW_RUNWAY_MONTHS) return `Runway: ${runway.toFixed(1)} months. Cut costs; investors knock on their own schedule.`;
   const asking = state.people.find((p) => p.raisePending);
   if (asking) return `${asking.name} is asking for a raise.`;
   const ar = L.openReceivables(state);
@@ -120,5 +122,6 @@ export function hintLine(state: GameState): string {
   if (state.features >= MARKETING_HINT_FEATURES && !S.hasRoom(state, 'marketing')) return 'Visitors are a trickle. Open Marketing.';
   if (state.ticketsServedShare < SUPPORT_HINT_SERVED) return 'Support is swamped: customers are churning.';
   if (state.day >= CONFIG.exit.sellFromDay) return `You can sell any time. Today's offer: ${fmtMoney(state.valuation.value)}.`;
+  if (whyLine(state) === AGREE) return 'Nothing owed and nothing bought yet, so the bars agree. Sign an enterprise deal and watch them split.';
   return 'Watch Profit and Cash flow disagree, then open Books to see why.';
 }

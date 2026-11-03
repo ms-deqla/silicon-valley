@@ -20,7 +20,7 @@ pnpm dev          # http://localhost:5173
 pnpm build        # dist/index.html, one self-contained file
 pnpm test         # vitest: ledger identities, determinism, every module
 pnpm typecheck
-pnpm balance --seeds 200 --months 36   # headless strategies × seeds, prints the balance table
+pnpm balance --seeds 200              # headless strategies × seeds over 60 months; --months 36 for the three-year table
 ```
 
 Keys: space pauses, 1 and 3 set the speed, D opens the debug drawer, Escape closes sheets.

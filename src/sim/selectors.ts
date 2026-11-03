@@ -49,7 +49,7 @@ export function roleOf(state: GameState, p: Person): Role {
 
 export function outputOf(state: GameState, p: Person): number {
   const laptop = p.hasLaptop ? 1 : CONFIG.people.noLaptopOutput;
-  return p.skill * (0.5 + p.morale / 200) * laptop;
+  return p.skill * (CONFIG.people.outputMoraleBase + p.morale / CONFIG.people.outputMoraleDivisor) * laptop;
 }
 
 export function peopleIn(state: GameState, role: Role): Person[] {

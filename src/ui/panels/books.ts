@@ -88,7 +88,12 @@ function valuationSection(state: GameState): HTMLElement {
   const v = state.valuation;
   const pr = v.premia;
   const premium = (label: string, x: number): HTMLElement | null => (x > 0.00005 ? kv(label, `+${percent(x, 1)}`) : null);
+  const floorWins = v.floor >= v.operating;
   return section(`Investors want ${percent(v.r, 1)}`,
+    note(floorWins
+      ? `Value = the floor. The cash-flow forecast comes to ${money(v.dcf)}, less than what the company already holds: cash, 90% of receivables, 60% of assets at book, and a team worth ${money(v.acquihire)} (skill × $50k), minus debt. The number moves when forecast cash flows beat that.`
+      : `Value = the cash-flow forecast plus net cash. Riskier choices raise the return investors want and lower the number even when profit is the same.`, 'muted'),
+    kv('In force', floorWins ? 'Floor' : 'Forecast'),
     kv('Base return', percent(pr.base, 1)),
     premium('Burn premium (runway)', pr.burn),
     premium('R&D premium', pr.rnd),

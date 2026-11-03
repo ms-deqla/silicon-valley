@@ -37,7 +37,7 @@ export const EVENT_CHOICES: Record<EventType, readonly [string, string]> = {
 const BASE_WEIGHT: Record<EventType, number> = E.weights;
 
 /** Counter-offers are rounded to this (cosmetic: salaries read as round numbers). */
-const SALARY_ROUND = 100;
+const SALARY_ROUND = CONFIG.people.salaryRound;
 
 /** Cosmetic company names for enterprise customers (Customer carries no name). */
 const CUSTOMER_NAMES = [
@@ -114,13 +114,15 @@ export function latePayerDefaultChance(state: GameState): number {
 /** Draw weight of every event right now; 0 means not eligible. */
 export function eventWeights(state: GameState): Record<EventType, number> {
   const short = S.serversShort(state) > 0;
+  // DESIGN.md 11: an event needs a company of some size before it can fire
+  const big = (t: EventType): boolean => state.customers.length >= E.minCustomers[t];
   return {
-    latePayer: latePayerTarget(state) ? BASE_WEIGHT.latePayer : 0,
-    outage: state.customers.length > 0 ? BASE_WEIGHT.outage * (short ? E.outageShortWeight : 1) : 0,
-    press: BASE_WEIGHT.press,
-    competitor: S.competitorActive(state) ? 0 : BASE_WEIGHT.competitor,
-    poach: poachTargets(state).length > 0 ? BASE_WEIGHT.poach : 0,
-    recession: S.recessionActive(state) ? 0 : BASE_WEIGHT.recession,
+    latePayer: big('latePayer') && latePayerTarget(state) ? BASE_WEIGHT.latePayer : 0,
+    outage: big('outage') ? BASE_WEIGHT.outage * (short ? E.outageShortWeight : 1) : 0,
+    press: big('press') ? BASE_WEIGHT.press : 0,
+    competitor: !S.competitorActive(state) && big('competitor') ? BASE_WEIGHT.competitor : 0,
+    poach: big('poach') && poachTargets(state).length > 0 ? BASE_WEIGHT.poach : 0,
+    recession: !S.recessionActive(state) && big('recession') ? BASE_WEIGHT.recession : 0,
   };
 }
 

@@ -44,6 +44,13 @@ function addPerson(s: GameState, role: Role, archetype: Archetype, quirk: Quirk,
   return p;
 }
 
+/** A company big enough for every event's minimum size (DESIGN.md 11). */
+function sized(seed = 7, day = 180): GameState {
+  const s = game(seed, day);
+  addSmbCustomers(s, Math.max(...Object.values(E.minCustomers)));
+  return s;
+}
+
 function addSmbCustomers(s: GameState, n: number): void {
   for (let i = 0; i < n; i++) {
     const c: Customer = {
@@ -205,7 +212,9 @@ describe('events: scheduling', () => {
 describe('events: eligibility and weights', () => {
   it('a fresh company can only get press, competitor or recession', () => {
     const s = game();
-    expect(events.eventWeights(s)).toEqual({ latePayer: 0, outage: 0, press: 1, competitor: 1, poach: 0, recession: 1 });
+    expect(events.eventWeights(s)).toEqual({ latePayer: 0, outage: 0, press: 1, competitor: 0, poach: 0, recession: 0 });
+    expect(events.eligibleEvents(s)).toEqual(['press']);
+    addSmbCustomers(s, E.minCustomers.recession);
     expect(events.eligibleEvents(s)).toEqual(['press', 'competitor', 'recession']);
     expect(events.openEvent(s, 'latePayer')).toBeNull();
     expect(events.openEvent(s, 'outage')).toBeNull();
@@ -246,6 +255,7 @@ describe('events: eligibility and weights', () => {
 
   it('competitor is skipped while one is active, recession while one is active', () => {
     const s = game();
+    addSmbCustomers(s, E.minCustomers.recession);
     s.effects.competitorUntilFeatures = s.features + E.competitorFeatures;
     expect(S.competitorActive(s)).toBe(true);
     expect(events.eventWeights(s).competitor).toBe(0);
@@ -276,7 +286,7 @@ describe('events: eligibility and weights', () => {
   });
 
   it('the random pick only draws eligible events', () => {
-    const s = game();
+    const s = sized();
     const seen = new Set<EventType>();
     for (let i = 0; i < 200; i++) {
       const card = events.openEvent(s);
@@ -285,7 +295,8 @@ describe('events: eligibility and weights', () => {
       s.card = null;
       s.effects.recessionUntilDay = 0; // undo the recession so it stays eligible
     }
-    expect([...seen].sort()).toEqual(['competitor', 'press', 'recession']);
+    // sized() has 20 customers, so the outage is eligible too; nothing without a target ever appears
+    expect([...seen].sort()).toEqual(['competitor', 'outage', 'press', 'recession']);
   });
 
   it('short servers make outages much likelier', () => {
@@ -362,7 +373,7 @@ describe('events: cards', () => {
 
   it('uses config numbers in the card text', () => {
     const s = game();
-    addSmbCustomers(s, 10);
+    addSmbCustomers(s, E.minCustomers.outage);
     const outage = open(s, 'outage');
     expect(outage.choices[0].detail).toContain('$15k');
     expect(outage.body).toContain('15%');
@@ -601,7 +612,7 @@ describe('event 3: press coverage', () => {
 
 describe('event 4: competitor next door', () => {
   it('"out-build them": conversion ×0.75 until two more features ship', () => {
-    const s = game();
+    const s = sized();
     s.features = 5;
     const conv = S.smbConversion(s);
     const close = S.enterpriseCloseProb(s);
@@ -622,7 +633,7 @@ describe('event 4: competitor next door', () => {
   });
 
   it('"cut prices": no conversion penalty, all prices ×0.85 for 180 days', () => {
-    const s = game();
+    const s = sized();
     s.features = 5;
     const conv = S.smbConversion(s);
     const price = S.priceMult(s);
@@ -699,7 +710,7 @@ describe('event 5: star employee poached', () => {
 describe('event 6: recession', () => {
   it('starts when the card opens: visitors ×0.6 and recession active for 180 days, whatever the choice', () => {
     for (const choiceId of events.EVENT_CHOICES.recession) {
-      const s = game();
+      const s = sized();
       const base = S.visitorsPerMonth(s);
       open(s, 'recession');
       expect(s.effects.recessionUntilDay).toBe(s.day + E.recessionDays);
@@ -713,7 +724,7 @@ describe('event 6: recession', () => {
   });
 
   it('"hold the line": nothing else changes', () => {
-    const s = game();
+    const s = sized();
     const sara = addPerson(s, 'product', 'senior', 'loyal', 11_000, 'Sara');
     const founderMorale = s.people[0].morale;
     open(s, 'recession');
@@ -726,7 +737,7 @@ describe('event 6: recession', () => {
   });
 
   it('"tighten": salaries −10% for 180 days and morale −20 for everyone, clamped at 0', () => {
-    const s = game();
+    const s = sized();
     const sara = addPerson(s, 'product', 'senior', 'loyal', 11_000, 'Sara');
     const low = addPerson(s, 'support', 'junior', 'coffee', 4_000, 'Lee');
     low.morale = 10;
@@ -755,7 +766,7 @@ describe('event 6: recession', () => {
   });
 
   it('the daily accrual charges the cut salary while the cut is on and the books reconcile', () => {
-    const s = game(3, 200);
+    const s = sized(3, 200);
     addPerson(s, 'product', 'senior', 'loyal', 12_000, 'Sara');
     open(s, 'recession');
     choose(s, 'tighten');

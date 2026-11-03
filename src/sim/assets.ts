@@ -10,7 +10,6 @@ import { ASSET_KINDS, no, OK } from './types';
 import type { Asset, AssetCard, AssetKind, GameState, Person, Room, Verdict } from './types';
 
 /** DESIGN.md 6: output = skill × (0.5 + morale / 200). Only used for the coffee payback estimate on the card. */
-const OUTPUT_MORALE_DIVISOR = 200;
 
 function round2(x: number): number {
   return Math.round(x * 100) / 100;
@@ -56,7 +55,7 @@ export function monthlyBenefitOf(state: GameState, kind: AssetKind): number {
       return round2(A.outageChancePerMissingServer * A.outageChurn * revenue);
     }
     case 'coffee':
-      return S.hasCoffee(state) ? 0 : round2((A.coffeeMorale / OUTPUT_MORALE_DIVISOR) * S.monthlySalaries(state));
+      return S.hasCoffee(state) ? 0 : round2((A.coffeeMorale / CONFIG.people.outputMoraleDivisor) * S.monthlySalaries(state));
     case 'demoRoom': {
       if (S.hasDemoRoom(state)) return 0;
       const dealsPerMonth = S.salesCapacityPerMonth(state) * S.enterpriseCloseProb(state);

@@ -130,6 +130,9 @@ function repayAtMaturity(state: GameState, loan: Loan, text: string): void {
 /** DESIGN.md 10: desperation knock when runway < 2 months, at most once per 60 days. */
 function checkDesperation(state: GameState): void {
   const C = CONFIG.capital;
+  // DESIGN.md 10: the lifeline comes only after investors have knocked once on their own schedule
+  // (the crisis knock at a close with cash < 0 goes through game.solvencyCheck and is always available)
+  if (state.schedule.knocks === 0) return;
   const runway = S.runwayMonths(state);
   if (runway === null || runway >= C.desperationRunwayMonths) return;
   if (state.day - state.schedule.lastDesperationDay < C.desperationCooldownDays) return;
@@ -238,6 +241,7 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
 
   // DESIGN.md 10: the next knock comes [120, 240] days after this one, whatever kind it was
   state.schedule.nextKnockDay = state.day + randInt(state.rng, C.knockEveryDays[0], C.knockEveryDays[1]);
+  state.schedule.knocks += 1;
   if (desperate) state.schedule.lastDesperationDay = state.day;
 
   state.log.push({

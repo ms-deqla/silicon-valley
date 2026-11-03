@@ -80,6 +80,11 @@ export const CONFIG = {
     starCommission: 0.10,
     /** output multiplier without a laptop */
     noLaptopOutput: 0.5,
+    /** output = skill × (outputMoraleBase + morale ÷ outputMoraleDivisor) (DESIGN.md 6) */
+    outputMoraleBase: 0.5,
+    outputMoraleDivisor: 200,
+    /** salaries and raises are rounded to this */
+    salaryRound: 100,
     morale: {
       start: 70,
       base: 70,
@@ -105,7 +110,7 @@ export const CONFIG = {
 
   product: {
     /** feature cost in points = base + perFeature × features shipped */
-    featureBaseCost: 4,
+    featureBaseCost: 3,
     featureCostPerFeature: 1,
     /** price multiplier per feature */
     pricePerFeature: 0.10,
@@ -113,7 +118,7 @@ export const CONFIG = {
     priceFeatureCap: 10,
     /** smb conversion = max × (1 − e^(−k × features)) */
     conversionK: 0.15,
-    conversionMax: 0.8,
+    conversionMax: 0.5,
   },
 
   rnd: {
@@ -124,7 +129,7 @@ export const CONFIG = {
   },
 
   marketing: {
-    baseVisitorsPerMonth: 2,
+    baseVisitorsPerMonth: 5,
     visitorsPerOutput: 10,
     /** visitors += this × sqrt(ad budget in $k) */
     adVisitorsPerSqrtK: 2,
@@ -134,8 +139,8 @@ export const CONFIG = {
 
   customers: {
     /** the market is finite: conversion and close rate scale by marketSize ÷ (marketSize + customers) */
-    marketSize: 600,
-    enterpriseShare: 0.10,
+    marketSize: 150,
+    enterpriseShare: 0.15,
     smbPrice: 300,
     enterpriseDeal: 30_000,
     /** an enterprise prospect waits this long in the lobby */
@@ -163,82 +168,116 @@ export const CONFIG = {
   },
 
   valuation: {
+    /** required return r (annual) = base + the five premia below (DESIGN.md 10) */
     base: 0.12,
+    /** burn premium = burnMax × clamp(1 − runway ÷ burnRunwayMonths, 0, 1) while the FCF run-rate is negative */
     burnMax: 0.15,
     burnRunwayMonths: 12,
+    /** R&D premium = (R&D salaries ÷ total monthly costs) × this */
     rndMax: 0.10,
+    /** leverage premium = debt ÷ (debt + last month's value) × this */
     leverageMax: 0.08,
+    /** concentration premium = largest customer's share of annualised revenue × this */
     concentrationMax: 0.05,
+    /** added to r while a recession is active */
     recession: 0.05,
+    /** months of monthly flows the DCF projects before the terminal value */
     horizonMonths: 60,
-    growthMin: -0.10,
-    growthMax: 0.08,
+    /** trusted trailing growth per month is clamped to [growthMin, growthMax] (lumpy enterprise bookings must not collapse the DCF) */
+    growthMin: -0.04,
+    growthMax: 0.04,
     /** trailing growth is measured over this many closed months (shorter while history is short) */
     growthWindowMonths: 6,
+    /** growth compares averages over this many closed months at both ends of the window (lumpy bookings) */
+    growthSmoothMonths: 3,
+    /** no growth estimate from a window shorter than this */
+    growthMinLagMonths: 2,
     /** trailing growth is trusted in proportion to last month's revenue ÷ this (tiny bases do not forecast) */
     growthTrustRevenue: 20_000,
+    /** growth decays linearly from g0 to this annual rate (the terminal growth) over growthDecayMonths */
     terminalGrowthAnnual: 0.02,
-    growthDecayMonths: 24,
+    growthDecayMonths: 12,
     /** terminal value is at most this many years of the horizon flow */
-    terminalMaxYears: 10,
-    runRateMonths: 3,
+    terminalMaxYears: 5,
+    /** the DCF base is the average operating cash flow (after maintenance capex) of the last this many closed months */
+    runRateMonths: 6,
+    /** floor = cash + arRecovery × open receivables + assetRecovery × assets at book − debt + acqui-hire value */
     arRecovery: 0.9,
     assetRecovery: 0.6,
+    /** acqui-hire value = Σ skill × this over everyone, founder included */
     acquihirePerSkill: 50_000,
     /** the acqui-hire part of the floor never exceeds this */
     acquihireCap: 1_000_000,
-    /** sparkline length */
-    historyMonths: 60,
+    /** months of company value kept in state.valueHistory: the HUD's 12-month sparkline (DESIGN.md 10) */
+    historyMonths: 12,
   },
 
   capital: {
-    firstKnockDay: [90, 240] as [number, number],
+    /** the first investor knock lands on a random day in this range, then one every knockEveryDays after any knock */
+    firstKnockDay: [60, 150] as [number, number],
     knockEveryDays: [120, 240] as [number, number],
+    /** a desperation knock opens when runway < this many months, at most once per desperationCooldownDays */
     desperationRunwayMonths: 2,
     desperationCooldownDays: 60,
+    /** offer = max(offerBurnMonths × burn, offerValueShare × operating value, offerMin); if profitable, max(offerValueShare × operating, offerMinProfitable) */
     offerBurnMonths: 6,
     offerValueShare: 0.15,
     offerMin: 50_000,
     offerMinProfitable: 100_000,
+    /** offers are rounded to this */
     offerRound: 10_000,
+    /** equity haircut = haircutBase + haircutRisk × riskIndex, riskIndex = clamp((r − base) ÷ riskSpan, 0, 1) */
     haircutBase: 0.10,
     haircutRisk: 0.25,
     /** r − base spans this range for riskIndex 0..1 */
     riskSpan: 0.43,
+    /** haircut on a desperation knock */
     desperationHaircut: 0.5,
     /** an offer never asks for more than this share of the company in one round */
     maxShareSold: 0.4,
+    /** loan annual rate = loanBaseRate + (r − base) × loanRiskShare; principal due in one payment after loanTermMonths */
     loanBaseRate: 0.04,
     loanRiskShare: 0.5,
     loanTermMonths: 36,
+    /** the one rollover at maturity: rolloverMonths more at +rolloverPremium */
     rolloverMonths: 12,
     rolloverPremium: 0.03,
   },
 
   events: {
+    /** the first event card lands on a random day in this range (none before day 180), then one every everyDays */
     firstDay: [180, 270] as [number, number],
     everyDays: [90, 180] as [number, number],
+    /** late payer: "Wait" pushes the due date out latePayerDelayDays with latePayerDefault chance of a write-off (halved with finance staff) */
     latePayerDelayDays: 60,
     latePayerDefault: 0.15,
+    /** late payer: "Press them" is paid in pressPayDays with pressNoRenew chance that customer will not renew */
     pressPayDays: 10,
     pressNoRenew: 0.5,
+    /** outage: the emergency fix costs outageFix; riding it out loses outageLoss of the customers */
     outageFix: 15_000,
     outageLoss: 0.15,
+    /** press: a PR push costs prPush and multiplies visitors by prMult, "Enjoy it" by pressMult, for pressDays */
     prPush: 10_000,
     prMult: 3,
     pressMult: 2,
     pressDays: 30,
+    /** competitor: conversion × competitorMult until competitorFeatures more features ship, or all prices × priceCut for priceCutDays */
     competitorMult: 0.75,
     competitorFeatures: 2,
     priceCut: 0.85,
     priceCutDays: 180,
+    /** poach: the counter-offer raises the salary by this share */
     counterOffer: 0.30,
+    /** recession: visitors × recessionVisitors for recessionDays; "Tighten" cuts salaries by tightenCut and morale by tightenMorale */
     recessionVisitors: 0.6,
     recessionDays: 180,
     tightenCut: 0.10,
     tightenMorale: -20,
     /** outage event weight multiplier when servers are short */
     outageShortWeight: 4,
+    /** an event needs a company of this size (customers) before it can fire */
+    minCustomers: { latePayer: 0, outage: 20, press: 0, competitor: 5, poach: 0, recession: 10 } as Record<EventType, number>,
     /** relative draw weights of the six events once eligible (the late payer is the most common story) */
     weights: { latePayer: 2, outage: 1, press: 1, competitor: 1, poach: 1, recession: 1 } as Record<EventType, number>,
   },

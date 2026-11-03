@@ -21,7 +21,8 @@ function round1(x: number): number {
 
 /** Money to the nearest $100, rounding to cents first so 7000 × 1.15 = 8049.99… lands on 8100. */
 function round100(x: number): number {
-  return Math.round(Math.round(x * 100) / 10_000) * 100;
+  const r = CONFIG.people.salaryRound;
+  return Math.round(Math.round(x * 100) / (100 * r)) * r;
 }
 
 function clamp(x: number, lo: number, hi: number): number {

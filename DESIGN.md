@@ -109,30 +109,31 @@ and a payback estimate (price ÷ estimated monthly cash benefit).
 
 ## 8. Customers and revenue
 
-- Visitors per month = 2 + 10 × Σ marketer output + 2 × √(ad budget in $k), × 2
+- Visitors per month = 5 + 10 × Σ marketer output + 2 × √(ad budget in $k), × 2
   during press (×3 with PR push), × 0.6 during recession. Arrivals are Poisson per day.
-- 10% of visitors are enterprise prospects; they need a sales rep. The rest are SMB.
+- 15% of visitors are enterprise prospects; they need a sales rep. The rest are SMB.
 - The market is finite: conversion and the enterprise close rate are multiplied by
-  saturation = marketSize ÷ (marketSize + current customers), marketSize 600.
-- SMB conversion = 0.8 × (1 − e^(−0.15 × features)) × saturation × 0.75 if a
+  saturation = marketSize ÷ (marketSize + current customers), marketSize 150.
+- SMB conversion = 0.5 × (1 − e^(−0.15 × features)) × saturation × 0.75 if a
   competitor is active. Converted: a subscriber paying monthly price = $300 ×
   (1 + 0.1 × min(features, 10)) × tier multiplier (× 0.85 during a price cut).
   Existing subscribers are re-priced at the live price every month end (features
   and tiers raise everyone's price; a price cut lowers everyone's). Billed at month
   end: cash and revenue in the same month.
 - Enterprise: prospect waits in the lobby up to 45 days for a rep with free capacity.
-  A rep closes skill × 0.5 deals per month of attention; close probability = 0.5 ×
-  the feature factor × saturation. Deal (annual contract) = $30k × (1 + 0.1 × features) × tier
-  multiplier × 1.3 with a demo room. The full contract value is booked as revenue
-  when signed; an invoice is issued, due in `terms` days (90, minus 5 per finance
-  skill point, floor 30). Cash arrives on the due day. Star reps take 10% commission
-  in cash at signing. Enterprise customers renew (a new deal + invoice) after 12
-  months if served ≥ 50% of their tickets, else they leave.
+  A rep closes output × 0.5 deals per month of attention; close probability = 0.5 ×
+  the feature factor × saturation, × 0.75 while a competitor is active (the same
+  penalty as SMB conversion). Deal (annual contract) = $30k × (1 + 0.1 × min(features,
+  10)) × tier multiplier (× 0.85 during a price cut) × 1.3 with a demo room. The full
+  contract value is booked as revenue when signed; an invoice is issued, due in `terms`
+  days (90, minus 5 per finance skill point, floor 30). Cash arrives on the due day.
+  Star reps take 10% commission in cash at signing. Enterprise customers renew (a new
+  deal + invoice) after 12 months if served ≥ 50% of their tickets, else they leave.
 - Churn (SMB, daily hazard from a monthly rate) = 2% + 6% × share of tickets
   unserved. Tickets = 0.3 per customer per month; an agent serves 15 × output.
 - Servers: floor(customers ÷ 50) needed, so the first server is due at 50 customers; shortfall drives outage risk (section 11).
 - Features: feature points accumulate at Σ engineer output per month; a feature
-  ships when points ≥ 4 + features shipped. Price and conversion use the feature
+  ships when points ≥ 3 + features shipped. Price and conversion use the feature
   count. R&D tier multiplier: tier 1 ×1, tier 2 ×1.5, tier 3 ×2.25.
 - R&D: available from the start. Research points accumulate at Σ researcher output
   per month; tier 2 at 60, tier 3 at 150. Researchers are paid like seniors.
@@ -180,15 +181,16 @@ Required return r (annual) = 0.12 base
   + concentration premium: largest customer's annualised revenue ÷ total annualised revenue × 0.05
   + recession: 0.05 while active
 
-Forecast: base = average of the last 3 closed months of (FCF + capex − disposal
+Forecast: base = average of the last 6 closed months of (FCF + capex − disposal
 proceeds − depreciation) i.e. operating cash flow after maintenance capex. Growth g0
-= trailing revenue growth per month measured over the last 6 closed months (or the
-longest window available, at least 2), multiplied by a trust factor = min(1, last
-month's revenue ÷ $20k) × min(1, window ÷ 6), so a few hundred dollars of revenue
-never forecast a rocket; clamped to [−10%, +8%] per month, decaying linearly to
-0.17%/month (2%/yr) over 24 months. Project 60 months, discount at monthly rate
+= trailing revenue growth per month, comparing 3-month average revenues 6 months
+apart (or the longest window available, at least 2 months; annual enterprise
+bookings are lumpy), multiplied by a trust factor = min(1, the recent 3-month
+average revenue ÷ $20k) × min(1, window ÷ 6), so a few hundred dollars of revenue
+never forecast a rocket; clamped to [−4%, +4%] per month, decaying linearly to
+0.17%/month (2%/yr) over 12 months. Project 60 months, discount at monthly rate
 (1+r)^(1/12) − 1, add a terminal value at month 60 at 2%/yr growth (only if the
-month-60 flow is positive), capped at 10 years of that flow. DCF is an enterprise value.
+month-60 flow is positive), capped at 5 years of that flow. DCF is an enterprise value.
 
 Operating value = max(0, DCF + cash − debt). This is what investors size offers on.
 
@@ -200,8 +202,10 @@ Company value = max(operating value, floor). Equity value: debt already netted.
 Shown as one number with a 12-month sparkline. Tapping shows "Investors want r%"
 with each premium listed.
 
-Investor knocks: first at a random day in [90, 240], then every [120, 240] days.
-Desperation knock when runway < 2 months (at most once per 60 days). Offer amount
+Investor knocks: first at a random day in [60, 150], then every [120, 240] days.
+Desperation knock when runway < 2 months (at most once per 60 days), but never
+before investors have knocked once on their own schedule; the crisis knock at a
+month-end close with cash < 0 (section 9) is always available. Offer amount
 = max(6 × monthly burn, 15% of operating value), min $50k, rounded to $10k; if
 profitable, max(15% of operating value, $100k). One round never sells more than 40%
 of the company: the amount is cut to fit (so a company with no operations can only
@@ -218,7 +222,10 @@ raise against its floor, and hiring cannot pump the next offer).
 
 ## 11. Events
 
-Every [90, 180] days, none before day 180, one card at a time, clock paused.
+The first card lands on a random day in [180, 270] (none before day 180), then one
+every [90, 180] days; one card at a time, clock paused. An event needs a company of
+some size: outage from 20 customers, competitor from 5, recession from 10; late
+payer, press and poaching have no minimum (they have their own preconditions).
 
 1. Big customer pays late (needs an open enterprise invoice): "Wait" → due +60 days,
    15% chance it is never paid (write-off, halved with finance staff). "Press them"
@@ -331,9 +338,23 @@ appears here.
   determinism (same seed + same action log → same JSON state); valuation (founder
   alone ≈ $200k; each premium raises r; a higher r lowers value with the same
   flows); capital (share maths, loan maturity); events (each choice has its effect).
-- Balance harness: strategies idle / engineer-first / sales-first / balanced /
-  reckless × 200 seeds × 60 months. Targets at month 36: balanced survives ≥ 70%;
-  reckless dies ≥ 50%; idle never dies and its median value stays under $1.5M (a
-  free founder for three years earns a small business, not an exit); balanced median
-  score between $1M and $15M with p90 under $50M; balanced median score at least
-  3× idle's. Engineer-first and sales-first rows are informational.
+- Balance harness (`pnpm balance`): strategies idle / engineer-first / sales-first /
+  balanced / reckless × 200 seeds × 60 months. Targets at month 36, medians over the
+  seed set: balanced survives ≥ 70%; reckless dies ≥ 50%; idle never dies and its
+  median value stays under $1.5M (a free founder for three years earns a small
+  business, not an exit); balanced median score between $1M and $15M with p90 under
+  $50M; balanced median score at least 3× idle's median value. Engineer-first and
+  sales-first rows are informational.
+- Pacing (the first ten real minutes must have things happening), medians over the
+  seed set: the idle founder ships the first feature by day 45 and has a paying
+  customer by the end of month 4; a balanced player has an enterprise prospect in the
+  lobby by month 6 and signs the first enterprise deal by month 9; the first investor
+  knock lands between month 3 and month 8; a sane player (balanced) sees at most one
+  event card per three months on average.
+- Five-year guard (section 1: a five-year run is playable without trivially winning
+  or dying), read at month 60: balanced still survives ≥ 70%; its median company
+  value stays under $75M and its p90 under $100M (a strong year-five business, not
+  a unicorn); idle's median value stays under $2M. A run shorter than 60 months
+  prints these as n/a.
+- The harness prints all three lists with PASS / FAIL after its tables;
+  test/balance.test.ts asserts the same lists at 3 seeds.
