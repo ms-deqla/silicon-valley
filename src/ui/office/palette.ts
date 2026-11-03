@@ -32,11 +32,18 @@ export const ROOM_NAME: Record<RoomKind, string> = {
 export const WOOD = '#E8D7BE';
 export const STREET = '#B8BDC4';
 export const GRASS = '#A9D68B';
+export const GRASS_LIGHT = '#B9DF9F';
+export const GRASS_DARK = '#9CCB80';
 export const INK = '#2B2F3A';
 export const GOLD = '#F5B300';
-export const PAVEMENT = '#DBD8D2';
-export const PAVEMENT_LIGHT = '#E6E3DE';
-export const KERB = '#B6B2AB';
+/** the warm lot pavement and its lighter tile (every other cell) */
+export const LOT = '#E5DDD0';
+export const LOT_LIGHT = '#EAE3D7';
+export const PAVEMENT = '#DBD5CB';
+export const PAVEMENT_LIGHT = '#E9E4DB';
+export const KERB = '#C3BDB2';
+/** the cream the room floors are tinted over */
+export const CREAM = '#FBF7EE';
 
 export function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '');
@@ -67,29 +74,35 @@ function derive(f: (base: string, kind: RoomKind) => string): Record<RoomKind, s
   return out;
 }
 
-/** pastel floor by kind */
-export const ROOM_FLOOR = derive((b, k) => mix(b, '#FFFFFF', k === 'garage' ? 0.42 : 0.64));
-/** back wall: lighter than the floor */
-export const ROOM_BACK = derive((b, k) => mix(b, '#FFFFFF', k === 'garage' ? 0.62 : 0.80));
-/** side walls: a touch deeper than the floor */
-export const ROOM_SIDE = derive((b, k) => mix(b, '#FFFFFF', k === 'garage' ? 0.25 : 0.46));
+/** floor: ~35% department colour over a cream base (the garage keeps more of its warm grey) */
+export const ROOM_FLOOR = derive((b, k) => mix(CREAM, b, k === 'garage' ? 0.55 : 0.35));
+/** back wall: a lighter tint than the floor */
+export const ROOM_BACK = derive((b, k) => mix(b, '#FFFFFF', k === 'garage' ? 0.6 : 0.76));
+/** side walls: thin strips a touch deeper than the floor */
+export const ROOM_SIDE = derive((b, k) => mix(b, '#FFFFFF', k === 'garage' ? 0.22 : 0.4));
+/** the thin darker top edge of the back wall */
+export const ROOM_TOP = derive((b, k) => mix(b, '#2E3448', k === 'garage' ? 0.35 : 0.3));
 /** outline */
-export const ROOM_EDGE = derive((b) => withAlpha(mix(b, '#2E3448', 0.45), 0.55));
+export const ROOM_EDGE = derive((b) => withAlpha(mix(b, '#2E3448', 0.45), 0.5));
 /** selection / tier glow */
 export const ROOM_GLOW = derive((b) => withAlpha(b, 0.55));
 /** placement ghost */
 export const ROOM_GHOST = derive((b) => withAlpha(b, 0.45));
 
-export const SKIN = ['#F7D7BE', '#EDBD98', '#C98F66', '#8E5C3B'];
+/** five skin tones and six hair colours, hashed per person (DESIGN 3: big-headed pastel figures) */
+export const SKIN = ['#F7D7BE', '#EDBD98', '#D9A077', '#B07A52', '#8E5C3B'];
 export const HAIR = ['#3B2A1E', '#6B4A2B', '#C47A2E', '#2B2B33', '#D9A441', '#7A4B8C'];
 
+/** visitors wear neutral blues and greys; staff wear their department colour */
 export const WALKER_BODY = {
-  smb: '#F2C14E',
-  enterprise: '#4A5B7D',
-  left: '#B9BEC6',
-  waiting: '#6F7E9C',
-  churn: '#C3C6CF',
+  smb: '#7FA5D8',
+  enterprise: '#3F4C6B',
+  left: '#A9AEB8',
+  waiting: '#60728F',
+  churn: '#B4B8C1',
 } as const;
+/** a few shirt blues so a crowd of SMB visitors is not one colour */
+export const SMB_SHIRTS: readonly string[] = ['#7FA5D8', '#6A91C7', '#93B5E0', '#8A9BB5'];
 
 /** confetti colours: the six department colours */
 export const CONFETTI: readonly string[] = [DEPT.product, DEPT.sales, DEPT.support, DEPT.marketing, DEPT.finance, DEPT.rnd];

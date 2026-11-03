@@ -9,8 +9,11 @@ import type { RoomKind } from '../../sim/types';
 export type Ctx = CanvasRenderingContext2D;
 
 export const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+/** the thin dark outline on figures, props and cars (DESIGN 3: a little outline at low alpha) */
+export const OUTLINE = 'rgba(30,30,50,0.25)';
 const EYE = '#2B2B33';
 const SMILE = 'rgba(70,40,40,0.45)';
+const SHOE = '#3A3F4C';
 
 export function rr(ctx: Ctx, x: number, y: number, w: number, h: number, r: number): void {
   const rad = Math.max(0, Math.min(r, w / 2, h / 2));
@@ -31,6 +34,16 @@ export function fillRR(ctx: Ctx, x: number, y: number, w: number, h: number, r: 
 
 export function strokeRR(ctx: Ctx, x: number, y: number, w: number, h: number, r: number, stroke: string, lw: number): void {
   rr(ctx, x, y, w, h, r);
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = lw;
+  ctx.stroke();
+}
+
+/** A rounded rect filled and then outlined. */
+export function fillStrokeRR(ctx: Ctx, x: number, y: number, w: number, h: number, r: number, fill: string, stroke: string, lw: number): void {
+  rr(ctx, x, y, w, h, r);
+  ctx.fillStyle = fill;
+  ctx.fill();
   ctx.strokeStyle = stroke;
   ctx.lineWidth = lw;
   ctx.stroke();
@@ -60,6 +73,17 @@ export function circle(ctx: Ctx, x: number, y: number, r: number, fill: string):
   ctx.fill();
 }
 
+/** A circle filled and then outlined. */
+export function circleO(ctx: Ctx, x: number, y: number, r: number, fill: string, stroke: string, lw: number): void {
+  ctx.beginPath();
+  ctx.arc(x, y, Math.max(0, r), 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = lw;
+  ctx.stroke();
+}
+
 export function ring(ctx: Ctx, x: number, y: number, r: number, stroke: string, lw: number): void {
   ctx.beginPath();
   ctx.arc(x, y, Math.max(0, r), 0, Math.PI * 2);
@@ -86,7 +110,8 @@ export function line(ctx: Ctx, x1: number, y1: number, x2: number, y2: number, s
 
 /**
  * The big-headed figure. (x, y) is the feet position, h the full height; the head
- * is ≈ 45% of h. `bob` shifts everything but the ground shadow, `walk` is the
+ * is ≈ 45% of h and the body a rounded capsule, both with a thin dark outline
+ * (DESIGN 3). `bob` shifts everything but the ground shadow, `walk` is the
  * walk-cycle phase (0 when standing), `dir` the facing direction (±1).
  */
 export function drawFigure(
@@ -94,27 +119,36 @@ export function drawFigure(
   bob: number, walk: number, seated: boolean, alpha: number, dir: number,
 ): void {
   const headR = h * 0.225;
-  const bodyW = h * 0.46;
-  const bodyH = seated ? h * 0.36 : h * 0.5;
-  const bodyTop = y - h * 0.56 + bob;
+  const bodyW = h * 0.44;
+  const bodyH = seated ? h * 0.33 : h * 0.47;
+  const bodyTop = y - (seated ? h * 0.5 : h * 0.56) + bob;
+  const lw = Math.max(0.8, h * 0.03);
   if (alpha < 1) ctx.globalAlpha = Math.max(0, alpha);
   if (!seated) {
-    ellipse(ctx, x, y + h * 0.015, bodyW * 0.62, h * 0.06, 'rgba(30,30,50,0.16)');
-    const sw = Math.sin(walk) * h * 0.07;
-    circle(ctx, x - bodyW * 0.24, y - h * 0.045 + sw * 0.5, h * 0.065, hair);
-    circle(ctx, x + bodyW * 0.24, y - h * 0.045 - sw * 0.5, h * 0.065, hair);
+    ellipse(ctx, x, y + h * 0.015, bodyW * 0.62, h * 0.055, 'rgba(30,30,50,0.16)');
+    const sw = Math.sin(walk) * h * 0.075;
+    circleO(ctx, x - bodyW * 0.22, y - h * 0.045 + sw * 0.5, h * 0.065, SHOE, OUTLINE, lw);
+    circleO(ctx, x + bodyW * 0.22, y - h * 0.045 - sw * 0.5, h * 0.065, SHOE, OUTLINE, lw);
   }
-  fillRR(ctx, x - bodyW / 2, bodyTop, bodyW, bodyH, bodyW * 0.32, body);
-  const hy = bodyTop - headR * 0.72;
-  circle(ctx, x, hy - headR * 0.12, headR, hair);
-  circle(ctx, x, hy + headR * 0.1, headR * 0.92, skin);
-  const ex = headR * 0.3;
-  const ey = hy + headR * 0.14;
-  const off = dir * headR * 0.1;
-  circle(ctx, x - ex + off, ey, headR * 0.09, EYE);
-  circle(ctx, x + ex + off, ey, headR * 0.09, EYE);
+  fillStrokeRR(ctx, x - bodyW / 2, bodyTop, bodyW, bodyH, bodyW * 0.45, body, OUTLINE, lw);
+  const hy = bodyTop - headR * 0.7;
+  const faceY = hy + headR * 0.1;
+  const faceR = headR * 0.92;
+  circleO(ctx, x, hy - headR * 0.12, headR, hair, OUTLINE, lw);
+  circleO(ctx, x, faceY, faceR, skin, OUTLINE, lw);
+  // the fringe: a cap of hair over the top of the face
   ctx.beginPath();
-  ctx.arc(x + off, ey + headR * 0.26, headR * 0.22, 0.2 * Math.PI, 0.8 * Math.PI);
+  ctx.arc(x, faceY, faceR, Math.PI * 1.28, Math.PI * 1.72);
+  ctx.closePath();
+  ctx.fillStyle = hair;
+  ctx.fill();
+  const ex = headR * 0.3;
+  const ey = faceY + headR * 0.06;
+  const off = dir * headR * 0.1;
+  circle(ctx, x - ex + off, ey, headR * 0.1, EYE);
+  circle(ctx, x + ex + off, ey, headR * 0.1, EYE);
+  ctx.beginPath();
+  ctx.arc(x + off, ey + headR * 0.24, headR * 0.22, 0.2 * Math.PI, 0.8 * Math.PI);
   ctx.strokeStyle = SMILE;
   ctx.lineWidth = Math.max(0.8, headR * 0.08);
   ctx.stroke();

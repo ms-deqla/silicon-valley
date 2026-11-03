@@ -11,7 +11,7 @@ import type { AssetKind, VisualEvent } from '../../sim/types';
 import type { Anchors, RoomView, Scene, SeatInfo } from './scene';
 import type { Crowd, Waypoint } from './walkers';
 import { badgeWalker, coinAt, countKind, findWalker, retargetWalker, spawnEffect, spawnWalker, wp } from './walkers';
-import { DEPT, GOLD, ROOM_BASE, WALKER_BODY } from './palette';
+import { DEPT, GOLD, ROOM_BASE, SMB_SHIRTS, WALKER_BODY } from './palette';
 import { hash01 } from './util';
 import type { Pt } from './util';
 
@@ -83,7 +83,8 @@ export function applyVisual(crowd: Crowd, scene: Scene, ev: VisualEvent, cx: Cho
         if (prod) visitRoom(path, a, prod, 0.9, 'none');
         path.push(wp(a.receptionFront.x, a.receptionFront.y, 0.45, 'coin'));
         leave(path, a, sides.to);
-        spawnWalker(crowd, 'smb', path, { body: WALKER_BODY.smb, coinAmount: cx.smbPrice });
+        const shirt = SMB_SHIRTS[Math.floor(hash01('shirt', crowd.spawned) * SMB_SHIRTS.length)];
+        spawnWalker(crowd, 'smb', path, { body: shirt, coinAmount: cx.smbPrice });
       } else if (ev.outcome === 'enterprise') {
         const waiting = findWalker(crowd, 'waiting');
         const path: Waypoint[] = [];

@@ -7,6 +7,7 @@
  * dt, independent of the sim speed.
  */
 import type { Layout } from './layout';
+import { HAIR, SKIN } from './palette';
 import { formatMoney, hash01 } from './util';
 
 export type WalkerKind = 'smb' | 'enterprise' | 'left' | 'waiting' | 'churn' | 'hire' | 'leave';
@@ -216,8 +217,8 @@ export function spawnWalker(crowd: Crowd, kind: WalkerKind, path: Waypoint[], op
   slot.dir = path.length > 1 && path[1].x < path[0].x ? -1 : 1;
   slot.personId = opts.personId ?? null;
   slot.body = opts.body;
-  slot.skin = opts.skin ?? Math.floor(hash01(seed, 1) * 4);
-  slot.hair = opts.hair ?? Math.floor(hash01(seed, 2) * 6);
+  slot.skin = opts.skin ?? Math.floor(hash01(seed, 1) * SKIN.length);
+  slot.hair = opts.hair ?? Math.floor(hash01(seed, 2) * HAIR.length);
   slot.alpha = opts.alpha ?? 1;
   slot.coinAmount = opts.coinAmount ?? 0;
   crowd.spawned += 1;

@@ -16,7 +16,7 @@ import { applyVisual } from './office/choreo';
 import type { ChoreoContext } from './office/choreo';
 import { computeLayout, hitCell, roomAt } from './office/layout';
 import type { Layout } from './office/layout';
-import { createPainter, paintFrame, setPainterCell } from './office/paint';
+import { createPainter, paintFrame, setPainterCell, setPainterScale } from './office/paint';
 import type { FrameInfo } from './office/paint';
 import { buildScene } from './office/scene';
 import type { Scene, SeatInfo } from './office/scene';
@@ -113,6 +113,7 @@ export function createOfficeRenderer(canvas: HTMLCanvasElement, controller: Game
     cssH = h;
     scaleX = w > 0 ? bw / w : dpr;
     scaleY = h > 0 ? bh / h : dpr;
+    if (painter) setPainterScale(painter, scaleX, scaleY);
   }
 
   function ensureLayout(floors: 1 | 2): Layout {
