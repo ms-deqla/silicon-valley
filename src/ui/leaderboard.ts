@@ -180,19 +180,20 @@ function compareNames(a: LeaderEntry, b: LeaderEntry): number {
 
 /** The number a run is ranked by live (DESIGN.md 0): its score once finished, its company value while playing. */
 export function standing(e: LeaderEntry): number {
-  return finished(e.status) ? e.score : e.value;
+  // DESIGN.md 0: one standing for everyone, posted as `score`: the final score once finished,
+  // what the buzzer would pay now (value × founder share) while playing
+  return e.score;
 }
 
-/** The live tiers: finished runs (real scores), then runs still going (provisional values), then runs left mid-round. */
+/** The live tiers: every live or finished run first, runs left mid-round last. */
 function tier(e: LeaderEntry): number {
-  return e.abandoned ? 2 : finished(e.status) ? 0 : 1;
+  return e.abandoned ? 1 : 0;
 }
 
 /**
- * DESIGN.md 0, the live order: finished runs by score, then runs still going by value
- * (finished first is the rule chosen where DESIGN is silent: a real score outranks a
- * provisional value), then runs left mid-round; within a tier by the standing desc,
- * ties by name, then id.
+ * DESIGN.md 0, the live order: everyone by their standing (the score once finished,
+ * what the buzzer would pay now while playing), so a run that went out of cash sinks;
+ * runs left mid-round last; ties by name, then id.
  */
 export function compareEntries(a: LeaderEntry, b: LeaderEntry): number {
   const t = tier(a) - tier(b);

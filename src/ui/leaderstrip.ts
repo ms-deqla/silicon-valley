@@ -28,19 +28,18 @@ export function entryStatus(e: LeaderEntry): string {
   return `${e.abandoned ? 'Abandoned' : 'Playing'} · month ${e.month}`;
 }
 
-/** The number every run is ranked by live (DESIGN.md 0): the score once finished, the company value while playing. */
+/** The number every run is ranked by live (DESIGN.md 0): the score once finished, what the buzzer would pay now while playing. */
 export function entryAmount(e: LeaderEntry): string {
   return money(standing(e));
 }
 
 /**
- * What a shown number is: a run still going's company value ('value', the strip ranks
- * by it) or what the buzzer would pay for it now ('now', the tables), a finished run's
- * score ('done' for sold, 'out' for out of cash), the day's best from an earlier run
- * ('best'), the frozen number of a run left mid-round ('left'), or the local player's
- * run that the shared board never received ('local').
+ * What a shown number is: what the buzzer would pay for a run still going ('now'), a
+ * finished run's score ('done' for sold, 'out' for out of cash), the day's best from an
+ * earlier run ('best'), the frozen number of a run left mid-round ('left'), or the local
+ * player's run that the shared board never received ('local').
  */
-export type Mark = 'now' | 'value' | 'done' | 'out' | 'best' | 'left' | 'local';
+export type Mark = 'now' | 'done' | 'out' | 'best' | 'left' | 'local';
 
 /** The mark of a run's own score: what the buzzer would pay now while playing, the final score once finished. */
 export function markOf(e: LeaderEntry): Mark {
@@ -57,10 +56,9 @@ export function unposted(lb: Leaderboard): boolean {
   return lb.shared && !lb.canWrite;
 }
 
-const MARK_TEXT: Record<Mark, string> = { now: 'now', value: 'value', done: '✓', out: 'out', best: 'best', left: 'left', local: 'not posted' };
+const MARK_TEXT: Record<Mark, string> = { now: 'now', done: '✓', out: 'out', best: 'best', left: 'left', local: 'not posted' };
 const MARK_TITLE: Record<Mark, string> = {
-  now: 'What the buzzer would pay now',
-  value: 'Company value now: runs still going are ranked by it',
+  now: 'What the buzzer would pay now: runs still going are ranked by it',
   done: 'Finished: the buzzer sold the company',
   out: 'Out of cash: scores 0',
   best: "This player's best score today",
@@ -160,11 +158,11 @@ export function createLeaderStrip(leaderboard: Leaderboard): LeaderStrip {
   /** Rank, name, the number the run is ranked by with its mark (or "not posted"), and the day's best when an earlier run did better. */
   function chip(e: LeaderEntry, rank: number, local: boolean): HTMLElement {
     const playing = e.status === 'playing';
-    const m: Mark = local ? 'local' : e.abandoned ? 'left' : playing ? 'value' : markOf(e);
+    const m: Mark = local ? 'local' : markOf(e);
     const better = e.best > e.score;
     return h('span', {
       class: `ls-chip${e.me ? ' me' : ''}${playing && !e.abandoned ? '' : ' done'}`,
-      title: `${e.name} · ${entryStatus(e)} · ${playing ? 'value' : 'score'} ${entryAmount(e)}${better ? ` · best today ${money(e.best)}` : ''}${local ? ` · ${MARK_TITLE.local}` : ''}`,
+      title: `${e.name} · ${entryStatus(e)} · ${playing ? 'now' : 'score'} ${entryAmount(e)}${better ? ` · best today ${money(e.best)}` : ''}${local ? ` · ${MARK_TITLE.local}` : ''}`,
     },
     h('b', { class: 'ls-rank', text: String(rank) }),
     h('span', { class: 'ls-name', text: e.name }),

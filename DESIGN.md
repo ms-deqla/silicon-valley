@@ -50,10 +50,14 @@ stay in the code and the tests but never reach the screen. Decided with the owne
 - **Live leaderboard.** Each player posts name, seed, current value, month and status
   every game month, and the score at the end, to the page's shared store: one
   document per player (`scores/<viewer id>`), readable by everyone, writable only by
-  that player. The strip shows every player on today's seed, sorted by value while
-  playing and by score once finished; the result screen shows the final table. Where
-  the shared store is absent (local dev, viewers who may not write) the page shows the
-  local player only and says so.
+  that player. Everyone on today's seed is ranked by one standing: the score for a
+  finished run, or value × share (what the buzzer would pay now) for a running one, so
+  a run that went out of cash sinks; a run not updated for two rounds counts as left
+  mid-round and sits last. A player's best finished score of the day is kept across
+  replays and ranks the final tables. Where the shared store is absent (local dev) the
+  page shows the local player only and says "Local only"; a viewer the store will not
+  write for sees everyone else and is told their run is not on the shared board; when
+  the store is slow the strip says the board may be out of date.
 
 ## 1. Scope of the demo
 

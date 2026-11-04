@@ -231,7 +231,7 @@ describe('leaderboard on the shared store', () => {
     expect(fake.docs.get('scores/u1')).toMatchObject({ score: 150, status: 'sold' });
   });
 
-  it('subscribe sorts finished runs by score, then runs still going by value, and flags me', async () => {
+  it('subscribe ranks everyone by their standing (the posted score) and flags me', async () => {
     const fake = createFakeDb();
     fake.put('scores/u2', doc({ name: 'Sold', status: 'sold', score: 500, value: 10 }));
     fake.put('scores/u3', doc({ name: 'Dead', status: 'dead', score: 0, value: 999 }));
@@ -247,17 +247,17 @@ describe('leaderboard on the shared store', () => {
     await lb.start('Mike', SEED);
     await flush();
     const last = seen[seen.length - 1];
-    // finished first: 500, then out of cash (0); then the runs still going by value: the 900 tie by name, then the fresh start
-    expect(last.map((e) => e.id)).toEqual(['u2', 'u3', 'u6', 'u4', 'u1']);
+    // by standing: the finished 500, the 450 tie by name (Alpha, Beta), then the two zeros by name (Dead, Mike)
+    expect(last.map((e) => e.id)).toEqual(['u2', 'u6', 'u4', 'u3', 'u1']);
     expect(last.map((e) => e.me)).toEqual([false, false, false, false, true]);
     expect(last.find((e) => e.me)).toMatchObject({ id: 'u1', name: 'Mike', seed: SEED, status: 'playing', value: 0, score: 0, best: 0 });
-    // a run still going never tops a finished one, however much the buzzer would pay now; among runs still going, value orders
+    // a run still going tops a finished one when the buzzer would pay more for it now
     lb.post({ value: 950, score: 900, month: 4, status: 'playing' });
     await flush();
-    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u2', 'u3', 'u1', 'u6', 'u4']);
-    // another player's change arrives live: a finish joins the finished tier
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u1', 'u2', 'u6', 'u4', 'u3']);
+    // another player's change arrives live: a finish with a higher score moves up
     fake.put('scores/u4', doc({ name: 'Beta', status: 'sold', score: 700 }));
-    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u4', 'u2', 'u3', 'u1', 'u6']);
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u1', 'u4', 'u2', 'u6', 'u3']);
     off();
     const count = seen.length;
     fake.put('scores/u6', doc({ name: 'Alpha', value: 1 }));
@@ -318,16 +318,16 @@ describe('leaderboard on the shared store', () => {
     expect(fake.setCalls).toBe(0);
     expect(fake.listeners.size).toBe(1);
     expect(seen[seen.length - 1].map((e) => [e.id, e.me, e.score])).toEqual([['u2', false, 500], ['u1', true, 300]]);
-    // another player arrives live: a run still going ranks after the finished ones
+    // another player arrives live: a run still going ranks by what the buzzer would pay now, above lower finished scores
     fake.put('scores/u3', doc({ name: 'New', value: 700, score: 700 }));
-    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u2', 'u1', 'u3']);
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u3', 'u2', 'u1']);
     const [listener] = [...fake.listeners];
     await lb.start('Mike', SEED);
     await flush();
     expect([...fake.listeners]).toEqual([listener]);
     expect(fake.setCalls).toBe(1);
     expect(fake.docs.get('scores/u1')).toMatchObject({ status: 'playing', score: 0, best: 300 });
-    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u2', 'u3', 'u1']);
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u3', 'u2', 'u1']);
     expect(seen[seen.length - 1].find((e) => e.me)).toMatchObject({ status: 'playing', score: 0, best: 300 });
   });
 
@@ -367,13 +367,13 @@ describe('leaderboard on the shared store', () => {
     await lb.start('Mike', SEED);
     await flush();
     let last = seen[seen.length - 1];
-    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u3', false], ['u2', false], ['u1', false]]);
+    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u2', false], ['u3', false], ['u1', false]]);
     // two rounds pass without a word from u2: the round clock never stops, so that run was left
     vi.setSystemTime(t0 + RULES.roundSeconds * 1000 * 2 + 1_000);
     lb.post({ value: 100, score: 100, month: 1, status: 'playing' });
     await flush();
     last = seen[seen.length - 1];
-    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u3', false], ['u1', false], ['u2', true]]);
+    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u1', false], ['u3', false], ['u2', true]]);
     const left = last.find((e) => e.id === 'u2') as LeaderEntry;
     expect(bestOf(left)).toBe(400);
     expect(entryStatus(left)).toBe('Abandoned · month 6');
@@ -382,7 +382,7 @@ describe('leaderboard on the shared store', () => {
     // the player comes back and posts again: live once more
     fake.put('scores/u2', doc({ name: 'Other', value: 950, score: 475, best: 400, month: 7 }));
     last = seen[seen.length - 1];
-    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u3', false], ['u2', false], ['u1', false]]);
+    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u2', false], ['u1', false], ['u3', false]]);
   });
 
   it('a refused write keeps the run in this browser: the preview shows it after a reload and a new run carries its best', async () => {
@@ -721,7 +721,7 @@ describe('leaderboard without the shared store', () => {
 describe('sortEntries', () => {
   const entry = (over: Partial<LeaderEntry>): LeaderEntry => ({ id: 'x', name: 'x', seed: SEED, value: 0, score: 0, best: 0, month: 0, status: 'playing', updatedAt: 0, me: false, abandoned: false, ...over });
 
-  it('finished runs first by score, then runs still going by value, then runs left mid-round; ties by name then id', () => {
+  it('everyone by standing, runs left mid-round last; ties by name then id', () => {
     const sorted = sortEntries([
       entry({ id: 'a', name: 'A', value: 200, score: 100 }),
       entry({ id: 'b', name: 'B', value: 900, score: 900 }),
@@ -732,9 +732,9 @@ describe('sortEntries', () => {
       entry({ id: 'g', name: 'G', value: 9000, score: 9000, abandoned: true }),
       entry({ id: 'h', name: 'H', value: 10, score: 10, abandoned: true }),
     ]);
-    // a finished 50 and a finished 0 above every value; then 1800, the 900 tie by name then id, 200; the runs left mid-round last, by value
-    expect(sorted.map((e) => e.id)).toEqual(['d', 'c', 'f', 'b', 'e', 'a', 'g', 'h']);
-    expect(sorted.map(standing)).toEqual([50, 0, 1800, 900, 900, 200, 9000, 10]);
+    // the 900 tie by name (A, then B by id), then 100, the finished 50, out of cash 0; the runs left mid-round last, by standing
+    expect(sorted.map((e) => e.id)).toEqual(['f', 'b', 'e', 'a', 'd', 'c', 'g', 'h']);
+    expect(sorted.map(standing)).toEqual([900, 900, 900, 100, 50, 0, 9000, 10]);
   });
 
   it('the tables rank by the best of the day: a finished player\'s best (or score), a run still going by the higher of its standing and its earlier best, a run left mid-round by its earlier best alone', () => {
@@ -747,15 +747,15 @@ describe('sortEntries', () => {
       entry({ id: 'f', name: 'F', score: 300 }),
       entry({ id: 'g', name: 'G', score: 700, best: 350, abandoned: true }),
     ]);
-    // the 300 tie (a finished best vs a standing) breaks like the live order: finished first; g's frozen 700 does not count, its 350 does
-    expect(sorted.map((e) => e.id)).toEqual(['b', 'd', 'g', 'c', 'f', 'a', 'e']);
+    // the 300 tie (a finished best vs a standing) breaks like the live order: the higher standing first; g's frozen 700 does not count, its 350 does
+    expect(sorted.map((e) => e.id)).toEqual(['b', 'd', 'g', 'f', 'c', 'a', 'e']);
     expect(sorted.map(bestOf)).toEqual([800, 500, 350, 300, 300, 100, 50]);
   });
 
-  it('the words: a run left mid-round reads as abandoned, and the amount is the value while playing, the score once finished', () => {
+  it('the words: a run left mid-round reads as abandoned, and the amount is the standing (what the buzzer would pay now, the score once finished)', () => {
     expect(entryStatus(entry({ month: 7, abandoned: true }))).toBe('Abandoned · month 7');
     expect(entryStatus(entry({ month: 7 }))).toBe('Playing · month 7');
-    expect(entryAmount(entry({ value: 1234, score: 600 }))).toBe(entryAmount(entry({ status: 'sold', value: 0, score: 1234 })));
+    expect(entryAmount(entry({ value: 1234, score: 600 }))).toBe(entryAmount(entry({ status: 'sold', value: 0, score: 600 })));
   });
 });
 
