@@ -1,0 +1,16 @@
+{
+  "name": "silicon-valley-api",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared leaderboard for Silicon Valley (siliconvalley.party): scores per device and seed",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

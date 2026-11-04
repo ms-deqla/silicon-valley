@@ -290,7 +290,7 @@ export function createResult(controller: ShellController, layer: HTMLElement, ho
         copyBtn,
         fallback,
         h('button', { class: 'btn primary again', type: 'button', text: 'Play again', onClick: () => hooks.onPlayAgain() }),
-        h('p', { class: 'caption', text: practice ? 'Same world, same name. Practice again, or start the clock for a scored run from the start screen.' : 'Same world, same name. A new run replaces this score on the board.' })),
+        h('p', { class: 'caption', text: practice ? 'Same world, same name. Practice again, or reload the page to start a scored run.' : 'Same world, same name. A new run replaces this score on the board.' })),
     ]);
 
     const lb = controller.leaderboard;

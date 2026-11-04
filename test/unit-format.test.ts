@@ -69,7 +69,7 @@ import type { GameState, Round } from '../src/sim/types';
 
 function round(day: number, shareSold: number, amount: number, desperate = false): Round {
   const preMoney = amount / shareSold - amount;
-  return { day, amount, shareSold, preMoney, postMoney: preMoney + amount, desperate };
+  return { day, amount, shareSold, preMoney, postMoney: preMoney + amount, desperate, fund: '' };
 }
 
 /** A state with two rounds and the log lines capital.ts writes when they close. */

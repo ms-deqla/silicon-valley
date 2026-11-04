@@ -9,6 +9,7 @@ import { pick, randInt } from './rng';
 import * as L from './ledger';
 import * as S from './selectors';
 import { gameOver } from './exit';
+import { computeValuation } from './valuation';
 import { fmtMoney, fmtPct, fmtRate } from './hints';
 
 const D = CONFIG.time.daysPerMonth;
@@ -296,6 +297,8 @@ function resolveKnock(state: GameState, card: Card, choiceId: string): void {
       // DESIGN.md 10: founder share multiplies by (1 − share sold); cash lands instantly
       L.recordEquity(state, amount);
       state.founderShare *= 1 - share;
+      // the HUD and the next card price off the new cash and share at once, not at the next close
+      state.valuation = computeValuation(state);
       state.rounds.push({
         day: state.day,
         amount,
@@ -303,6 +306,7 @@ function resolveKnock(state: GameState, card: Card, choiceId: string): void {
         preMoney,
         postMoney: preMoney + amount,
         desperate: card.kind === 'desperation',
+              fund: str(card.data.fund),
       });
       const text = `${fund} invested ${fmtMoney(amount)} for ${fmtPct(share)}. You now own ${fmtPct(state.founderShare)}.`;
       state.log.push({ day: state.day, text, tone: 'good' });

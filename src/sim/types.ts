@@ -168,6 +168,8 @@ export interface Round {
   preMoney: number;
   postMoney: number;
   desperate: boolean;
+  /** the investor's name, for the cap table */
+  fund: string;
 }
 
 export interface PnL {

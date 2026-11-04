@@ -221,7 +221,7 @@ small { font-size: 11px; }
 .captable.books { height: 10px; margin: 2px 0 6px; }
 .captable.books .cap-seg { height: 10px; border-radius: 5px; }
 
-.hud-row { display: flex; align-items: stretch; gap: 8px; height: 40px; }
+.hud-row { display: flex; align-items: stretch; gap: 8px; height: 44px; }
 /* DESIGN.md 17: the calendar badge, a white card with a blue header strip */
 .cal {
   flex: 1;
@@ -268,7 +268,7 @@ small { font-size: 11px; }
 .countdown.danger { background: var(--bad); animation: tick 1s steps(2, jump-none) infinite; }
 .hud-btn {
   flex: none;
-  width: 42px;
+  width: 44px;
   border: 1px solid var(--glass-stroke);
   border-radius: var(--r-sm);
   background: var(--glass);
@@ -294,7 +294,7 @@ small { font-size: 11px; }
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 32px;
+  min-height: 44px;
   padding: 3px 6px 3px 5px;
   border: 1px solid var(--glass-stroke);
   border-radius: var(--r-sm);
@@ -563,7 +563,7 @@ small { font-size: 11px; }
 .sheet-tabs { display: flex; gap: 6px; padding: 0 var(--gutter) 8px; }
 .tab {
   flex: 1;
-  height: 40px;
+  height: 44px;
   border: 0;
   border-radius: var(--r-sm);
   background: var(--paper);

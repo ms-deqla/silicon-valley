@@ -81,7 +81,7 @@ function addCustomers(s: GameState, n: number, monthlyPrice: number): void {
 
 /** A round as capital.ts books it: pushed, and the founder's share diluted (DESIGN.md 10). */
 function raise(s: GameState, day: number, amount: number, shareSold: number, desperate = false): Round {
-  const r: Round = { day, amount, shareSold, preMoney: amount / shareSold - amount, postMoney: amount / shareSold, desperate };
+  const r: Round = { day, amount, shareSold, preMoney: amount / shareSold - amount, postMoney: amount / shareSold, desperate, fund: 'Test Fund' };
   s.rounds.push(r);
   s.founderShare *= 1 - shareSold;
   return r;

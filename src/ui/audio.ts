@@ -616,7 +616,13 @@ export function createAudio(): Audio {
       else void graph.ctx.suspend().catch(() => undefined);
     },
     play(sfx) {
-      if (!graph || !started || !enabled || destroyed || graph.ctx.state !== 'running') return;
+      if (!graph || !started || !enabled || destroyed) return;
+      if (graph.ctx.state !== 'running') {
+        // the first effects right after Start arrive while resume() is still pending: play them once it lands
+        const g = graph;
+        void g.ctx.resume().then(() => { if (g.ctx.state === 'running' && enabled && !destroyed) this.play(sfx); }).catch(() => undefined);
+        return;
+      }
       const at = graph.ctx.currentTime;
       switch (sfx) {
         case 'coin':

@@ -76,7 +76,8 @@ function msToNextUtcMidnight(now: Date): number {
 
 /** DESIGN.md 20: the seed of a tournament code, or today's world when the code is empty. */
 export function seedFor(code: string, now: Date): number {
-  const t = code.trim();
+  // case does not matter: "Friday" and "friday" are the same world (DESIGN.md 20)
+  const t = code.trim().toLowerCase();
   return t ? hashSeed(t) : dailySeed(now);
 }
 
@@ -92,14 +93,14 @@ function codeFromUrl(): string {
 const START_CSS = `
 .start-title { font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2, #5d616c); }
 .start-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.swatches { display: flex; gap: 6px; flex-wrap: wrap; }
-.swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(20, 22, 30, 0.15); cursor: pointer; padding: 0; }
+.swatches { display: flex; gap: 7px; flex-wrap: wrap; }
+.swatch { width: 42px; height: 42px; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(20, 22, 30, 0.15); cursor: pointer; padding: 0; }
 .swatch[aria-pressed="true"] { border-color: var(--ink, #22242b); transform: scale(1.08); }
 .start-buttons { display: flex; flex-direction: column; gap: 8px; }
 .btn.practice-btn { width: 100%; min-height: 46px; }
 .start-links { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.start-links .link { padding: 6px 2px; min-height: 32px; }
-.start-speaker { display: inline-flex; align-items: center; gap: 6px; border: 0; background: rgba(255, 255, 255, 0.75); border-radius: 999px; padding: 6px 12px 6px 9px; font-weight: 700; font-size: 12.5px; cursor: pointer; box-shadow: var(--shadow-soft, 0 4px 14px rgba(20, 22, 30, 0.08)); }
+.start-links .link { padding: 10px 2px; min-height: 44px; display: inline-flex; align-items: center; }
+.start-speaker { display: inline-flex; align-items: center; gap: 6px; border: 0; background: rgba(255, 255, 255, 0.75); border-radius: 999px; padding: 10px 14px 10px 11px; min-height: 44px; font-weight: 700; font-size: 12.5px; cursor: pointer; box-shadow: var(--shadow-soft, 0 4px 14px rgba(20, 22, 30, 0.08)); }
 .start-speaker .icon { width: 18px; height: 18px; }
 .start-speaker[aria-pressed="false"] { color: var(--ink-3, #8b92a3); }
 `;

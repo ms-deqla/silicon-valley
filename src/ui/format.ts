@@ -163,7 +163,7 @@ export function capTable(state: GameState): CapEntry[] {
   for (let i = 0; i < rounds.length; i++) {
     let share = rounds[i].shareSold;
     for (let j = i + 1; j < rounds.length; j++) share *= 1 - rounds[j].shareSold;
-    const fund = fundOfRound(state, i);
+    const fund = state.rounds[i].fund || fundOfRound(state, i);
     const label = fund ?? `Round ${i + 1}`;
     entries.push({ kind: 'round', label, initials: initials(label), share, round: rounds[i], number: i + 1 });
   }

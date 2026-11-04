@@ -202,7 +202,7 @@ export function sequenceSection(): PlaybookSection {
     title: 'The scaling sequence',
     paragraphs: [
       'The first move: an engineer, at once.',
-      `When the first investor knocks (between ${n.firstKnockClock[0]} and ${n.firstKnockClock[1]} on the countdown): take the money.`,
+      `When the first investor knocks (between ${n.firstKnockClock[0]} and ${n.firstKnockClock[1]} on the countdown): take it if you have under ${CONFIG.coach.knockTakeRunwayMonths} months of cash or they ask ${Math.round(CONFIG.coach.knockCheapShare * 100)}% or less; otherwise keep your share.`,
       'When the hint says visitors are a trickle: a marketer.',
       'When a prospect is waiting in the lobby: a sales rep.',
       `At ${PLAYBOOK.supportFromCustomers} customers: a support agent.`,
