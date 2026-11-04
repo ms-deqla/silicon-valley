@@ -1,8 +1,10 @@
 # BrightByte
 
-A top-down office-floor business sim for the browser. You start in a garage with $50k
-and yourself. Open departments, hire, buy assets, raise money, survive events, and sell
-the company after year 2.
+A top-down office-floor business sim for the browser, played as a ten-minute contest.
+You start in a garage with $50k and yourself. Hire into four departments, buy servers,
+take or decline investors, survive three events, and when the countdown hits zero the
+buzzer sells the company. Score = company value × the share you still own. A live
+leaderboard shows everyone playing today's world.
 
 The point of the game is the HUD: **Profit** and **Free cash flow** disagree constantly,
 and the player can always see why (receivables, capex versus depreciation, write-offs),
@@ -23,7 +25,8 @@ pnpm typecheck
 pnpm balance --seeds 200              # headless strategies × seeds over 60 months; --months 36 for the three-year table
 ```
 
-Keys: space pauses, 1 and 3 set the speed, D opens the debug drawer, Escape closes sheets.
+The published ruleset is DESIGN.md section 0; `RULES` in `src/sim/config.ts` switches
+engine mechanics on and off. The full management-sim version is tagged `v1-full`.
 
 ## Layout
 

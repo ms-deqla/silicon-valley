@@ -2,7 +2,7 @@
  * Every tuning number in the game, named and commented. Nothing in src/sim may
  * hard-code a number that appears here. DESIGN.md sections 5–12 are the prose form.
  */
-import type { Archetype, AssetKind, EventType, RoomSize } from './types';
+import type { Archetype, AssetKind, EventType, Role, RoomSize } from './types';
 
 export const CONFIG = {
   time: {
@@ -303,3 +303,47 @@ export const CONFIG = {
 } as const;
 
 export type Config = typeof CONFIG;
+
+/**
+ * The tournament ruleset (DESIGN.md 0): which engine mechanics reach the player.
+ * Mutable on purpose so engine tests can switch a mechanic back on; the game never
+ * writes to it.
+ */
+export interface Rules {
+  /** departments the player can hire into; the others exist in the engine only */
+  roles: Role[];
+  /** one fixed hire per department: no candidates, no quirks, no salary noise */
+  hire: Record<Role, { archetype: Archetype; skill: number; salary: number }>;
+  raises: boolean;
+  quits: boolean;
+  loans: boolean;
+  finance: boolean;
+  rnd: boolean;
+  adBudget: boolean;
+  /** events that can fire */
+  events: EventType[];
+  /** the round: wall-clock seconds per game month, and per round */
+  secondsPerMonth: number;
+  roundSeconds: number;
+}
+
+export const RULES: Rules = {
+  roles: ['product', 'sales', 'support', 'marketing'],
+  hire: {
+    product: { archetype: 'mid', skill: 3, salary: 6_000 },
+    sales: { archetype: 'mid', skill: 3, salary: 5_000 },
+    support: { archetype: 'mid', skill: 3, salary: 4_000 },
+    marketing: { archetype: 'mid', skill: 3, salary: 5_000 },
+    finance: { archetype: 'mid', skill: 3, salary: 5_000 },
+    rnd: { archetype: 'senior', skill: 4, salary: 11_000 },
+  },
+  raises: false,
+  quits: false,
+  loans: false,
+  finance: false,
+  rnd: false,
+  adBudget: false,
+  events: ['latePayer', 'press', 'outage'],
+  secondsPerMonth: 20,
+  roundSeconds: 600,
+};

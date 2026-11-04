@@ -1,5 +1,7 @@
 export * from './types';
-export { CONFIG } from './config';
+export { CONFIG, RULES } from './config';
+export type { Rules } from './config';
+export { headcount, setupCost, roomRentForHire } from './tournament';
 export { createGame, advanceDay, advanceTo, closeMonth, dispatch, canDispatch, replay, solvencyCheck } from './game';
 export * as selectors from './selectors';
 export * as ledger from './ledger';

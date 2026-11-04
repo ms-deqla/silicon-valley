@@ -9,6 +9,45 @@ reasons the player can see.
 This document is the single source of truth for the demo. Everything below was
 decided with the owner (two grilling rounds, 30 questions, all accepted on 2026-11-02).
 
+## 0. The tournament (the game as published)
+
+The published game is a ten-minute contest played on the engine that sections 1–16
+describe. `RULES` in config.ts says which engine mechanics reach the player; the rest
+stay in the code and the tests but never reach the screen. Decided with the owner on
+2026-11-03.
+
+- **The round.** A 10:00 wall-clock countdown that never stops. Game time runs at a
+  fixed one month per 20 seconds (30 game months in a round, two and a half years).
+  No pause, no speed buttons. Investor and event cards stop the game clock, not the
+  countdown: a slow decision costs game months. Switching tabs costs the same.
+- **Same world for everyone.** One seed per day (YYYYMMDD) for all players.
+- **Score** = company value × the founder's remaining share, taken when the countdown
+  reaches zero (the buzzer sells the company). Running out of cash scores 0.
+- **What the player can do.** Hire or fire in four departments (Product, Sales,
+  Support, Marketing), one fixed kind of person each: mid-level, skill 3, salary
+  $6k / $5k / $4k / $5k a month. Buy servers ($20k) and one demo room ($40k). Accept or
+  decline investors (equity only). Answer three events: late payer, press, outage.
+- **What happens by itself.** A hire gets a desk ($1k) and a laptop ($2k) and, when the
+  department has no room with a free desk, a small room ($3k/mo rent) placed on the
+  next free spot (lowest row first), so capex and rent still show in the bars; the
+  lobby appears with the first room. Firing removes the most recent hire in that
+  department with three months' severance.
+- **Switched off.** Candidates, archetypes, quirks, morale-driven raises and quits
+  (morale still moves with crowding and overload and scales output), Finance and R&D,
+  loans and loan maturity, the ad budget, the competitor, poaching and recession
+  events, product tiers, selling assets, selling the company early, room placement.
+- **Screen.** The four HUD numbers, the why line and the hint line stay; Books is one
+  tap away. The countdown and a live leaderboard sit on the main screen; the bottom of
+  the screen is one control board: a row per department (headcount, cost, −/+) and the
+  two asset buttons.
+- **Live leaderboard.** Each player posts name, seed, current value, month and status
+  every game month, and the score at the end, to the page's shared store: one
+  document per player (`scores/<viewer id>`), readable by everyone, writable only by
+  that player. The strip shows every player on today's seed, sorted by value while
+  playing and by score once finished; the result screen shows the final table. Where
+  the shared store is absent (local dev, viewers who may not write) the page shows the
+  local player only and says so.
+
 ## 1. Scope of the demo
 
 In: all six departments, people, assets, the three bars + value, valuation with risk
@@ -358,3 +397,10 @@ appears here.
   prints these as n/a.
 - The harness prints all three lists with PASS / FAIL after its tables;
   test/balance.test.ts asserts the same lists at 3 seeds.
+- Tournament (section 0, the published rules, 30 game months): a scripted tournament
+  player (engineer in month 1, a rep when the first prospect waits, support from 10
+  customers, a server when short, the first two knocks taken) survives ≥ 80% and
+  scores a median between $0.5M and $5M; taking every knock does not beat taking two
+  by more than 1.5× and declining every knock does not beat taking two (dilution is a
+  real trade-off); an idle founder scores under $1M; the engine-only strategies above
+  run under the full engine (`--full`).

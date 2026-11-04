@@ -356,6 +356,11 @@ export type Action =
   | { type: 'card'; choiceId: string }
   | { type: 'prepayLoan' }
   | { type: 'sell' }
+  /** tournament actions (DESIGN.md 0): one fixed hire per department, auto-provisioned */
+  | { type: 'hireRole'; role: Role }
+  | { type: 'fireRole'; role: Role }
+  | { type: 'buyDemoRoom' }
+  | { type: 'timeUp' }
   | { type: 'debug'; op: 'cash' | 'knock' | 'event' | 'feature' | 'tenCustomers' };
 
 export interface ActionRecord {

@@ -2,7 +2,8 @@
  * The building: grid placement, opening and closing rooms, the lobby, the demo room.
  * DESIGN.md section 5.
  */
-import { CONFIG } from './config';
+import { CONFIG, RULES } from './config';
+import * as assets from './assets';
 import * as L from './ledger';
 import * as S from './selectors';
 import { fire, founderOf, seatPerson } from './staff';
@@ -26,6 +27,7 @@ function overlaps(ax: number, ay: number, aw: number, ah: number, bx: number, by
 
 /** In bounds, no overlap with rooms/garage/lobby on that floor, floor exists, cash for the demo room, one demo room max, Finance unlocked. */
 export function canPlaceRoom(state: GameState, kind: Role | 'demo', size: RoomSize, floor: 0 | 1, x: number, y: number): Verdict {
+  if ((kind === 'finance' && !RULES.finance) || (kind === 'rnd' && !RULES.rnd)) return no('Not in this game.');
   // DESIGN.md 8: Finance unlocks the day the first enterprise invoice is issued
   if (kind === 'finance' && !state.financeUnlocked) return no('Finance unlocks with your first enterprise invoice.');
   if (kind === 'demo') {
@@ -165,4 +167,40 @@ export function closeRoom(state: GameState, roomId: string): void {
   if (letGo > 0) parts.push(`${letGo} ${letGo === 1 ? 'person' : 'people'} let go, severance ${fmtMoney(severance)}.`);
   if (proceeds > 0) parts.push(`Furniture sold for ${fmtMoney(proceeds)}.`);
   state.log.push({ day: state.day, text: parts.join(' '), tone: 'info' });
+}
+
+// ---------------------------------------------------------------- tournament helpers (DESIGN.md 0)
+
+/** The spot a room of this kind would be auto-placed on: lowest row first, then leftmost; floor 0 before floor 1. */
+export function autoSpot(state: GameState, kind: Role | 'demo', size: RoomSize = 'small'): { floor: 0 | 1; x: number; y: number } | null {
+  for (const floor of [0, 1] as const) {
+    if (floor >= state.floors) break;
+    const spots = validSpots(state, kind, size, floor);
+    if (spots.length === 0) continue;
+    spots.sort((a, b) => b.y - a.y || a.x - b.x);
+    return { floor, x: spots[0].x, y: spots[0].y };
+  }
+  return null;
+}
+
+/**
+ * Make sure the role has a free desk: reuse one, add a desk to a room with capacity,
+ * or open a small room on the next free spot (lobby appears with the first room).
+ * Pays for the desk through assets.buy (capex). Returns the room with the free seat, or null.
+ */
+export function ensureSeat(state: GameState, role: Role): Room | null {
+  const seat = S.seatFor(state, role);
+  if (seat) return seat;
+  const withSpace = state.rooms.find((r) => r.kind === role && assets.canBuy(state, 'desk', r.id).ok);
+  if (withSpace) {
+    assets.buy(state, 'desk', withSpace.id);
+    return withSpace;
+  }
+  const spot = autoSpot(state, role);
+  if (!spot) return null;
+  if (!canPlaceRoom(state, role, 'small', spot.floor, spot.x, spot.y).ok) return null;
+  const room = placeRoom(state, role, 'small', spot.floor, spot.x, spot.y);
+  if (!assets.canBuy(state, 'desk', room.id).ok) return null;
+  assets.buy(state, 'desk', room.id);
+  return room;
 }

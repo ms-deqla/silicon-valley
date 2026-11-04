@@ -2,7 +2,7 @@
  * People: candidates, hiring, firing, morale, raises, quitting, learning.
  * DESIGN.md section 6.
  */
-import { CONFIG } from './config';
+import { CONFIG, RULES } from './config';
 import { chance, pick, pickWeighted, randRange } from './rng';
 import * as L from './ledger';
 import * as S from './selectors';
@@ -351,7 +351,7 @@ function quits(state: GameState): void {
 /** Monthly: learning, raise requests, quits, candidate refresh. */
 export function monthlyStaff(state: GameState): void {
   learn(state);
-  requestRaises(state);
-  quits(state);
+  if (RULES.raises) requestRaises(state);
+  if (RULES.quits) quits(state);
   refreshCandidates(state);
 }

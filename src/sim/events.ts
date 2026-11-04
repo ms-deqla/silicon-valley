@@ -10,7 +10,7 @@
  */
 import type { Card, EventType, GameState, Invoice, LogEntry, Person } from './types';
 import { EVENT_TYPES, ROLE_JOB } from './types';
-import { CONFIG } from './config';
+import { CONFIG, RULES } from './config';
 import { chance, pick, pickWeighted, randInt } from './rng';
 import * as L from './ledger';
 import * as S from './selectors';
@@ -115,7 +115,7 @@ export function latePayerDefaultChance(state: GameState): number {
 export function eventWeights(state: GameState): Record<EventType, number> {
   const short = S.serversShort(state) > 0;
   // DESIGN.md 11: an event needs a company of some size before it can fire
-  const big = (t: EventType): boolean => state.customers.length >= E.minCustomers[t];
+  const big = (t: EventType): boolean => RULES.events.includes(t) && state.customers.length >= E.minCustomers[t];
   return {
     latePayer: big('latePayer') && latePayerTarget(state) ? BASE_WEIGHT.latePayer : 0,
     outage: big('outage') ? BASE_WEIGHT.outage * (short ? E.outageShortWeight : 1) : 0,

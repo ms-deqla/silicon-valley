@@ -2,7 +2,7 @@
  * The clock and the dispatcher. DESIGN.md section 14 is the prose form of this file.
  * Sub-systems live in their own modules; this file only orders them.
  */
-import { CONFIG } from './config';
+import { CONFIG, RULES } from './config';
 import { chance, randInt, seedRng } from './rng';
 import * as L from './ledger';
 import * as S from './selectors';
@@ -15,6 +15,7 @@ import * as valuation from './valuation';
 import * as capital from './capital';
 import * as events from './events';
 import * as exit from './exit';
+import * as tournament from './tournament';
 import { no, OK, ROLES } from './types';
 import type { Action, ActionRecord, Candidate, GameState, Person, Role, Room, Verdict } from './types';
 
@@ -234,7 +235,12 @@ export function canDispatch(state: GameState, action: Action): Verdict {
     case 'closeRoom': return rooms.canCloseRoom(state, action.roomId);
     case 'buyAsset': return assets.canBuy(state, action.kind, action.roomId);
     case 'sellAsset': return assets.canSell(state, action.assetId);
+    case 'hireRole': return tournament.canHireRole(state, action.role);
+    case 'fireRole': return tournament.canFireRole(state, action.role);
+    case 'buyDemoRoom': return tournament.canBuyDemoRoom(state);
+    case 'timeUp': return OK;
     case 'setAdBudget': {
+      if (!RULES.adBudget) return no('Not in this game.');
       if (!S.hasRoom(state, 'marketing')) return no('Open a Marketing room first.');
       if (action.amount < 0 || action.amount > CONFIG.marketing.adMax) return no('Budget out of range.');
       return OK;
@@ -265,6 +271,10 @@ export function dispatch(state: GameState, action: Action): Verdict {
     case 'card': resolveCard(state, action.choiceId); break;
     case 'prepayLoan': capital.prepayLoan(state); break;
     case 'sell': exit.sellCompany(state); break;
+    case 'hireRole': tournament.hireRole(state, action.role); break;
+    case 'fireRole': tournament.fireRole(state, action.role); break;
+    case 'buyDemoRoom': tournament.buyDemoRoom(state); break;
+    case 'timeUp': tournament.timeUp(state); break;
     case 'debug': debugOp(state, action.op); break;
   }
   return OK;

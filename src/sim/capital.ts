@@ -4,7 +4,7 @@
  */
 import type { Card, CardChoice, GameState, Loan, Verdict } from './types';
 import { no, OK } from './types';
-import { CONFIG } from './config';
+import { CONFIG, RULES } from './config';
 import { pick, randInt } from './rng';
 import * as L from './ledger';
 import * as S from './selectors';
@@ -233,7 +233,7 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
     speaker: `A partner at ${voice.fund}`,
     quote,
     body,
-    choices: [equity, loan, decline],
+    choices: RULES.loans ? [equity, loan, decline] : [equity, decline],
     data: { amount, share, preMoney, loanRate, fund: voice.fund },
     createdDay: state.day,
   };
