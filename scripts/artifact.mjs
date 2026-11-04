@@ -13,12 +13,13 @@ function all(re) {
 
 const title = (src.match(/<title>[\s\S]*?<\/title>/) ?? ['<title>BrightByte</title>'])[0];
 const description = (src.match(/<meta name="description"[^>]*>/) ?? [''])[0];
+const fontLinks = all(/<link[^>]*rel="stylesheet"[^>]*href="https:\/\/fonts\.googleapis\.com[^"]*"[^>]*>/g);
 const styles = all(/<style[^>]*>[\s\S]*?<\/style>/g);
 const scripts = all(/<script[^>]*>[\s\S]*?<\/script>/g).map((s) => s.replace(/<script[^>]*>/, '<script type="module">'));
 const body = (src.match(/<body[^>]*>([\s\S]*)<\/body>/) ?? [null, '<div id="app"></div>'])[1]
   .replace(/<script[^>]*>[\s\S]*?<\/script>/g, '')
   .trim();
 
-const out = [title, description, ...styles, body, ...scripts].filter(Boolean).join('\n');
+const out = [title, description, ...fontLinks, ...styles, body, ...scripts].filter(Boolean).join('\n');
 writeFileSync(new URL('../dist/artifact.html', import.meta.url), out);
-console.log(`dist/artifact.html: ${(out.length / 1024).toFixed(1)} kB, ${styles.length} style block(s), ${scripts.length} script block(s)`);
+console.log(`dist/artifact.html: ${(out.length / 1024).toFixed(1)} kB, ${fontLinks.length} font link(s), ${styles.length} style block(s), ${scripts.length} script block(s)`);
