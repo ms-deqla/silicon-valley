@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CONFIG, RULES, advanceDay, advise, adviseCard, canDispatch, createGame, dispatch, ledger, selectors as S } from '../src/sim';
-import type { Action, Advice, Card, GameState, Role } from '../src/sim';
+import type { Action, Advice, Card, GameState, Role, Round } from '../src/sim';
 import * as tournament from '../src/sim/tournament';
 import * as events from '../src/sim/events';
 import { openKnock } from '../src/sim/capital';
@@ -68,6 +68,12 @@ function addProspect(s: GameState, value = CONFIG.customers.enterpriseDeal): voi
   s.prospects.push({ id: `pr${s.nextId++}`, arrivedDay: s.day, expiresDay: s.day + CONFIG.customers.prospectWaitDays, value, repId: null, progress: 0 });
 }
 
+/** A round already taken, as capital.ts books it (the coach's knock rule counts them, DESIGN 18 rule 1). */
+function roundTaken(s: GameState, amount = 50_000, shareSold = 0.1): void {
+  const r: Round = { day: s.day, amount, shareSold, preMoney: amount / shareSold - amount, postMoney: amount / shareSold, desperate: false, fund: 'Test Fund' };
+  s.rounds.push(r);
+}
+
 /** Cash as the engine would set it, then the hint the coach gives for it. */
 function withCash(s: GameState, cash: number): Advice {
   s.cash = cash;
@@ -113,14 +119,26 @@ function expectWatch(a: Advice): void {
 
 describe('rule 1: an open card gets the card advice (DESIGN 18)', () => {
   describe('investor knock', () => {
-    it('take when runway < 6 months, with the months in the reason', () => {
+    it('take first when the cash runs out before the buzzer: runway 4 against 30 months to go', () => {
       const s = started();
       s.cash = 4 * RULES.hire.product.salary; // 4 months of the engineer's pay, nothing else to pay
       act(s, { type: 'debug', op: 'knock' });
       expect(openCard(s).kind).toBe('knock');
       expect(S.runwayMonths(s)).toBeCloseTo(4, 6);
       expect(cardChoice(s)).toBe('equity');
-      expect(adviseCard(s, openCard(s))?.reason).toBe('4 months of cash left.');
+      expect(adviseCard(s, openCard(s))?.reason).toBe(`4 months of cash against ${ROUND_MONTHS} to the buzzer: without it you run out.`);
+      expect(advise(s).label).toBe('Take it');
+    });
+
+    it('take when runway < 6 months once the buzzer is within reach, with the months in the reason', () => {
+      const s = started();
+      s.cash = 5 * RULES.hire.product.salary;
+      act(s, { type: 'debug', op: 'knock' });
+      expect(S.runwayMonths(s)).toBeCloseTo(5, 6);
+      // 4 months to the buzzer: the company reaches it (5 ≥ 4), 4 is not fewer than 4, so the runway rule is the one that fires
+      s.schedule.roundEndDay = s.day + 4 * D;
+      expect(cardChoice(s)).toBe('equity');
+      expect(adviseCard(s, openCard(s))?.reason).toBe('5 months of cash left.');
       expect(advise(s).label).toBe('Take it');
     });
 
@@ -178,11 +196,63 @@ describe('rule 1: an open card gets the card advice (DESIGN 18)', () => {
       expect(adviseCard(s, card)?.reason).toMatch(/^20% for .* is more than you need: you have [\d.]+ months of cash\.$/);
     });
 
-    it('a short runway is checked first: the money is taken even in the last months', () => {
+    it('the order: dying before the buzzer beats the last-months decline, which beats the short runway', () => {
       const s = started();
-      s.cash = 4 * RULES.hire.product.salary;
-      s.schedule.roundEndDay = s.day + 2 * D;
       act(s, { type: 'debug', op: 'knock' });
+      s.schedule.roundEndDay = s.day + 3 * D;
+
+      // runway 5 with 3 months left: the company reaches the buzzer, so "fewer than 4 months remain" wins over "runway < 6"
+      s.cash = 5 * RULES.hire.product.salary;
+      expect(cardChoice(s)).toBe('decline');
+      expect(adviseCard(s, openCard(s))?.reason).toBe('Only 3 months remain: money that arrives now cannot be used.');
+
+      // runway 2 with 3 months left: cash below zero at a close scores 0, so the money is taken even in the last months
+      s.cash = 2 * RULES.hire.product.salary;
+      expect(cardChoice(s)).toBe('equity');
+      expect(adviseCard(s, openCard(s))?.reason).toBe('2 months of cash against 3 to the buzzer: without it you run out.');
+
+      // runway 3 with 3 months left: the third close is the buzzer's, the cash lasts exactly that long, so it is not dying
+      s.cash = 3 * RULES.hire.product.salary;
+      expect(cardChoice(s)).toBe('decline');
+
+      // runway 2.5 with 2.2 months left: three closes still to come, 2.5 < 3 → it runs out
+      s.schedule.roundEndDay = s.day + 2.2 * D;
+      s.cash = 2.5 * RULES.hire.product.salary;
+      expect(cardChoice(s)).toBe('equity');
+    });
+
+    it('cheap money after the second investor is declined unless it can still be spent: $300k in the bank → "nothing left to buy"', () => {
+      const s = started();
+      act(s, { type: 'debug', op: 'knock' });
+      const card = openCard(s);
+      card.data.share = 0.12;
+      card.data.amount = 50_000;
+      roundTaken(s);
+      roundTaken(s);
+      expect(s.rounds).toHaveLength(2);
+      // 6 months to the buzzer: enough to spend the money, and $40k of cash (8 months) reaches it
+      s.schedule.roundEndDay = s.day + 6 * D;
+
+      s.cash = 300_000;
+      expect(cardChoice(s)).toBe('decline');
+      expect(adviseCard(s, card)?.reason).toBe('$300k in the bank and nothing left to buy: keep your 88%.');
+      expect(advise(s).label).toBe('Decline');
+
+      // the same offer with $40k in the bank: $90k after it is still under the $100k growth line, so it can be spent
+      s.cash = 40_000;
+      expect(S.runwayMonths(s)).toBeCloseTo(8, 6);
+      expect(cardChoice(s)).toBe('equity');
+      expect(adviseCard(s, card)?.reason).toBe('12% for $50k is cheap and 6 months remain to spend it.');
+
+      // exactly at the line it is still taken; one dollar over and it is not
+      s.cash = 50_000;
+      expect(cardChoice(s)).toBe('equity');
+      s.cash = 50_001;
+      expect(cardChoice(s)).toBe('decline');
+
+      // with only one round taken the cash in the bank does not matter
+      s.rounds.pop();
+      s.cash = 300_000;
       expect(cardChoice(s)).toBe('equity');
     });
 
@@ -203,7 +273,7 @@ describe('rule 1: an open card gets the card advice (DESIGN 18)', () => {
   });
 
   describe('lifeline', () => {
-    it('take when cash < 0 or runway < 2 months ("or the bank closes you"), else decline', () => {
+    it('take when cash < 0 or the cash runs out before the buzzer ("or the bank closes you"), else decline', () => {
       const s = started();
       const card = openKnock(s, true);
       expect(card?.kind).toBe('desperation');
@@ -216,11 +286,32 @@ describe('rule 1: an open card gets the card advice (DESIGN 18)', () => {
       s.cash = 1.6 * RULES.hire.product.salary;
       expect(S.runwayMonths(s)).toBeCloseTo(1.6, 6);
       expect(cardChoice(s)).toBe('equity');
-      expect(adviseCard(s, card)?.reason).toBe('1.6 months of cash left: take it or the bank closes you.');
+      expect(adviseCard(s, card)?.reason).toBe(`1.6 months of cash against ${ROUND_MONTHS} to the buzzer: take it or the bank closes you.`);
 
+      // 20 months of cash against 30 to the buzzer still runs out; 40 months does not
       s.cash = 100_000;
+      expect(S.runwayMonths(s)).toBeCloseTo(20, 6);
+      expect(cardChoice(s)).toBe('equity');
+      s.cash = 200_000;
       expect(cardChoice(s)).toBe('decline');
-      expect(adviseCard(s, card)?.reason).toContain('you can reach the buzzer without giving up');
+      expect(adviseCard(s, card)?.reason).toContain('you have 40 months of cash: you can reach the buzzer without giving up');
+    });
+
+    it('a short runway that outlasts the buzzer is not a crisis: 1.6 months of cash with one month left → decline', () => {
+      const s = started();
+      const card = openKnock(s, true);
+      expect(card?.kind).toBe('desperation');
+      if (!card) return;
+      s.cash = 1.6 * RULES.hire.product.salary;
+      s.schedule.roundEndDay = s.day + D;
+      expect(cardChoice(s)).toBe('decline');
+      expect(adviseCard(s, card)?.reason).toBe(`you have 1.6 months of cash: you can reach the buzzer without giving up ${Math.round((card.data.share as number) * 100)}%.`);
+      // two closes to come and 1.6 months of cash: it runs out
+      s.schedule.roundEndDay = s.day + 1.5 * D;
+      expect(cardChoice(s)).toBe('equity');
+      // cash below zero is a crisis whatever the buzzer says
+      s.cash = -1;
+      expect(cardChoice(s)).toBe('equity');
     });
   });
 

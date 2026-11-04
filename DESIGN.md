@@ -569,11 +569,15 @@ hint line, the lobby, and the strip."
 
 Coach rules (`advisor.advise`, first match wins; every number from config/RULES; the
 advice carries the action to dispatch, a label, a reason and an urgency now/soon/idea):
-1. A card is open → card advice (`adviseCard`): investor knock: take when runway < 6
-   months, or when the share sold ≤ 15% and at least 6 game months remain (the money
-   can be spent); decline when fewer than 4 game months remain or the share sold > 30%
-   with runway > 8 months; lifeline (desperation / crisis): take when cash < 0 or runway
-   < 2 months ("or the bank closes you"), else decline. Late payer: press when cash <
+1. A card is open → card advice (`adviseCard`): investor knock, in this order: take
+   when the cash would run out before the buzzer (runway shorter than the month-end
+   closes still to come, since cash below zero at a close scores 0); decline when fewer
+   than 4 game months remain; take when runway < 6 months; take a share ≤ 15% with at
+   least 6 game months left only while fewer than 2 rounds were taken or the money would
+   not push cash above $100k (the Playbook: after the second investor, decline unless you
+   can spend it); otherwise decline. Lifeline (desperation / crisis): take when cash < 0
+   or the cash would run out before the buzzer, else decline (a crisis knock at the
+   close still comes). Late payer: press when cash <
    3 months of costs, else wait. Press coverage: push when features ≥ 3 and cash > $25k.
    Outage: fix when customers lost × average monthly price × months left > the fix cost.
 2. No features and no engineer → hire an engineer (now).
@@ -583,7 +587,9 @@ advice carries the action to dispatch, a label, a reason and an urgency now/soon
 6. Features ≥ 3 and no marketer, cash rule → hire a marketer (soon).
 7. Customers > 120 × support agents → another agent (soon).
 8. Cash > $100k, a rep hired, no demo room → build the demo room (idea).
-9. Cash > $100k → another engineer, then another marketer (idea), alternating by count.
+9. Cash > $100k → another engineer, then another marketer (idea), alternating by count,
+   up to a second of each (an uncapped version hires into a cash crunch and lifelines;
+   the Playbook says "a second engineer, then a second marketer").
 10. Runway < 2 months and no card → "Hold on: a lifeline comes if the bank runs dry.
     Don't hire." (now, no action).
 11. Otherwise: "Watch the lobby and the strip." (idea, no action).

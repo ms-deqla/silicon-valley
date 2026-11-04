@@ -220,12 +220,17 @@ function cardsLeftWaiting(state: GameState, extras: RunExtras): Takeaway | null 
   const seconds = Math.round(ms / 1000);
   if (seconds < 1) return null;
   const monthsLost = ms / (RULES.secondsPerMonth * 1000);
-  const perMonth = stakeChangeOfLastMonth(state);
-  if (perMonth === null) return null;
+  const lastChange = stakeChangeOfLastMonth(state);
+  const pts = points(state);
+  const latest = last(pts);
+  // a positive proxy for what a month is worth: the last month's move, or the stake spread over the months played
+  const average = latest ? latest.stake / Math.max(1, pts.length) : 0;
+  const perMonth = Math.max(Math.abs(lastChange ?? 0), average);
+  if (perMonth <= 0) return null;
   const impact = monthsLost * perMonth;
   return {
     title: 'Cards left waiting',
-    detail: `Cards waited ${seconds} s: ${monthsText(monthsLost)} lost. Your stake was growing ${fmtMoney(perMonth)} a month, so those months were worth about ${fmtMoney(impact)}.`,
+    detail: `Cards waited ${seconds} s: ${monthsText(monthsLost)} lost. A month of your round was worth about ${fmtMoney(perMonth)} of stake, so those months cost about ${fmtMoney(impact)}.`,
     impact,
   };
 }
@@ -239,6 +244,8 @@ function cardsLeftWaiting(state: GameState, extras: RunExtras): Takeaway | null 
 function supportTooLate(state: GameState): Takeaway | null {
   const C = CONFIG.customers;
   const hireDay = firstHireDay(state, 'support');
+  // DESIGN.md 20: "late" means later than the coach's threshold, not merely after the first cancellation
+  if (hireDay !== null && customersAt(state, hireDay) <= CONFIG.coach.supportCustomers) return null;
   const avoidable = C.churnUnserved / (C.churnBase + C.churnUnserved);
   const price = averageMonthlyPrice(state);
   let churned = 0;

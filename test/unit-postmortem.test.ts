@@ -192,44 +192,75 @@ describe('takeaway: raised but unspent (DESIGN 20)', () => {
 // ---------------------------------------------------------------- cards left waiting
 
 describe('takeaway: cards left waiting (DESIGN 0 and 20)', () => {
-  it('months lost = cardWaitMs ÷ (RULES.secondsPerMonth × 1000); impact = months lost × the last closed month\'s stake change', () => {
+  const WAIT_2: RunExtras = { cardWaitMs: 40_000, practice: false };
+
+  it('months lost = cardWaitMs ÷ (RULES.secondsPerMonth × 1000); a month is worth the stake spread over the months played when that beats the last month\'s move', () => {
     const s = game();
     closeMonths(s, [{ valueEnd: 200_000 }, { valueEnd: 260_000 }]);
-    const t = find(takeaways(s, { cardWaitMs: 40_000, practice: false }), 'Cards left waiting');
+    const t = find(takeaways(s, WAIT_2), 'Cards left waiting');
     const monthsLost = 40_000 / (RULES.secondsPerMonth * 1000);
     expect(monthsLost).toBe(2);
-    expect(t?.impact).toBeCloseTo(2 * 60_000, 6);
-    expect(t?.detail).toBe(`Cards waited 40 s: 2 game months lost. Your stake was growing ${fmtMoney(60_000)} a month, so those months were worth about ${fmtMoney(120_000)}.`);
+    // the last month added 60k; the stake of 260k over 2 months is 130k a month: the larger proxy wins
+    expect(t?.impact).toBeCloseTo(2 * 130_000, 6);
+    expect(t?.detail).toBe(`Cards waited 40 s: 2 game months lost. A month of your round was worth about ${fmtMoney(130_000)} of stake, so those months cost about ${fmtMoney(260_000)}.`);
   });
 
-  it('the stake is value × the share at that close: a round in the last month can turn the change negative, and then there is nothing to say', () => {
+  it('the last month\'s move is the proxy when it is the larger: 100k → 400k is 300k a month against a 200k average', () => {
+    const s = game();
+    closeMonths(s, [{ valueEnd: 100_000 }, { valueEnd: 400_000 }]);
+    const t = find(takeaways(s, WAIT_2), 'Cards left waiting');
+    expect(t?.impact).toBeCloseTo(2 * 300_000, 6);
+    expect(t?.detail).toContain(`worth about ${fmtMoney(300_000)} of stake`);
+  });
+
+  it('the proxy is never zeroed by a fall: a negative last month counts by its size, and the stake average carries a small one', () => {
+    // a crash: 500k → 100k is a 400k move, larger than the 50k average
+    const crash = game();
+    closeMonths(crash, [{ valueEnd: 500_000 }, { valueEnd: 100_000 }]);
+    expect(find(takeaways(crash, WAIT_2), 'Cards left waiting')?.impact).toBeCloseTo(2 * 400_000, 6);
+
+    // the stake is value × the share at that close: a round in the last month turns the change to −5k, the average of 97.5k carries it
     const s = game();
     closeMonths(s, [{ valueEnd: 200_000 }, { valueEnd: 260_000 }]);
     raise(s, 45, 50_000, 0.25);
-    // month 0: 200k × 1; month 1: 260k × 0.75 = 195k → −5k a month
-    expect(find(takeaways(s, { cardWaitMs: 40_000, practice: false }), 'Cards left waiting')).toBeUndefined();
+    // month 0: 200k × 1; month 1: 260k × 0.75 = 195k → −5k a month; 195k ÷ 2 months = 97.5k
+    const t = find(takeaways(s, WAIT_2), 'Cards left waiting');
+    expect(t).toBeDefined();
+    expect(t?.impact).toBeCloseTo(2 * 97_500, 6);
   });
 
   it('a round signed on the close day counts from the next close (the book closes before the card is answered)', () => {
     const s = game();
     closeMonths(s, [{ valueEnd: 200_000 }, { valueEnd: 260_000 }]);
     raise(s, 60, 50_000, 0.25);
-    const t = find(takeaways(s, { cardWaitMs: 40_000, practice: false }), 'Cards left waiting');
-    expect(t?.impact).toBeCloseTo(2 * 60_000, 6);
+    // the share at the close of day 60 is still 1: the stake is 260k, 130k a month over two months
+    expect(find(takeaways(s, WAIT_2), 'Cards left waiting')?.impact).toBeCloseTo(2 * 130_000, 6);
+    // one day earlier the round dilutes that close: 195k of stake, 97.5k a month
+    s.rounds[0].day = 59;
+    expect(find(takeaways(s, WAIT_2), 'Cards left waiting')?.impact).toBeCloseTo(2 * 97_500, 6);
   });
 
   it('with one closed month the change is measured from the day-0 value still at the head of valueHistory', () => {
     const s = game();
     const start = s.valueHistory[0];
-    expect(start).toBeGreaterThan(0);
-    closeMonths(s, [{ valueEnd: 300_000 }]);
+    expect(start).toBeGreaterThan(100_000);
+    // a fall from the day-0 value to 50k: the move (start − 50k) is larger than the 50k average over one month
+    closeMonths(s, [{ valueEnd: 50_000 }]);
     const t = find(takeaways(s, { cardWaitMs: 20_000, practice: false }), 'Cards left waiting');
-    expect(t?.impact).toBeCloseTo(300_000 - start, 6);
+    expect(t?.impact).toBeCloseTo(start - 50_000, 6);
     expect(t?.detail).toContain('Cards waited 20 s: 1 game month lost.');
+
+    // a rise to 300k: the average (300k over one month) beats the move (300k − start)
+    const up = game();
+    closeMonths(up, [{ valueEnd: 300_000 }]);
+    expect(find(takeaways(up, { cardWaitMs: 20_000, practice: false }), 'Cards left waiting')?.impact).toBeCloseTo(300_000, 6);
   });
 
-  it('says nothing with no closed month, with no wait, or with a wait under half a second', () => {
+  it('says nothing with no closed month, with no stake, with no wait, or with a wait under half a second', () => {
     expect(find(takeaways(game(), { cardWaitMs: 20_000, practice: false }), 'Cards left waiting')).toBeUndefined();
+    const worthless = game();
+    closeMonths(worthless, [{ valueEnd: 0 }, { valueEnd: 0 }]);
+    expect(find(takeaways(worthless, WAIT_2), 'Cards left waiting')).toBeUndefined();
     const s = game();
     closeMonths(s, [{ valueEnd: 200_000 }, { valueEnd: 260_000 }]);
     expect(find(takeaways(s, NO_WAIT), 'Cards left waiting')).toBeUndefined();
@@ -274,19 +305,40 @@ describe('takeaway: support too late (DESIGN 8 and 20)', () => {
   });
 
   it('a hire on a close day comes after that close, so that month still counts; a hire before any churn says nothing', () => {
+    // month 4 (closing on day 150, 15 customers) loses 4 more; a hire that day counts them, the hire is still "late" by the threshold
+    const specs = tenMonths();
+    specs[4].churned = 4;
     const s = game();
-    closeMonths(s, tenMonths());
+    closeMonths(s, specs);
     addCustomers(s, 20, 400);
-    act(s, 90, hire('support'));
+    act(s, 150, hire('support'));
     const t = find(takeaways(s, NO_WAIT), 'Support came late');
-    expect(t?.detail).toContain('2 customers had already cancelled');
-    expect(t?.impact).toBeCloseTo(avoidable * 400 * 2 * ((300 - 90) / D), 6);
+    expect(t?.detail).toContain('came in month 5 with about 15 customers: 9 customers had already cancelled');
+    expect(t?.impact).toBeCloseTo(avoidable * 400 * (2 * ((300 - 90) / D) + 3 * ((300 - 120) / D) + 4 * ((300 - 150) / D)), 6);
 
     const early = game();
     closeMonths(early, tenMonths());
     addCustomers(early, 20, 400);
     act(early, 30, hire('support'));
     expect(find(takeaways(early, NO_WAIT), 'Support came late')).toBeUndefined();
+  });
+
+  it('support hired at or under the coach\'s 10 customers is on time, whatever churned before (DESIGN 20: "vs 10")', () => {
+    expect(CONFIG.coach.supportCustomers).toBe(10);
+    // tenMonths: 6 customers at the close of day 90 and 10 at the close of day 120, with 5 churned by then
+    for (const day of [90, 120, 149]) {
+      const s = game();
+      closeMonths(s, tenMonths());
+      addCustomers(s, 20, 400);
+      act(s, day, hire('support'));
+      expect(titles(takeaways(s, NO_WAIT)), `hired on day ${day}`).not.toContain('Support came late');
+    }
+    // on the close that takes the count to 15 the same churn becomes a lesson
+    const late = game();
+    closeMonths(late, tenMonths());
+    addCustomers(late, 20, 400);
+    act(late, 150, hire('support'));
+    expect(find(takeaways(late, NO_WAIT), 'Support came late')?.detail).toContain('5 customers had already cancelled');
   });
 
   it('the people on the payroll date the hire when the action log does not (the full engine\'s hire action)', () => {

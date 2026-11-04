@@ -23,9 +23,20 @@
  * carries `best`, the player's best finished score on the seed, kept across Play again
  * and across page loads: the tables rank by it.
  *
+ * A third transport, chosen at build time (DESIGN.md 0, the hosted game): when
+ * `VITE_LEADERBOARD_URL` is set, the same documents go over HTTP to the leaderboard
+ * service (server/): `PUT /scores/<device id>` with the whole document, coalesced
+ * exactly like the store writes, and `GET /scores?seed=` polled every 5 s while
+ * someone subscribes (and once after every write). The device id is minted once into
+ * localStorage (a per-session id where storage is blocked). HTTP counts as the shared
+ * store: `shared` and `canWrite` are true, a failed poll keeps the last list and is
+ * retried on the next tick, and the list is `stale` after 10 s without a good answer.
+ * The artifact store stays preferred when the page runs in the viewer and no URL is
+ * set; the local fallback stays last.
+ *
  * Nothing here touches sim state or the DOM (RULES is read for the round length):
- * localStorage and timers are the only browser APIs, and every localStorage call is
- * wrapped. Names and numbers that come back from the store are other people's input:
+ * localStorage, fetch and timers are the only browser APIs, and every localStorage
+ * call is wrapped. Names and numbers that come back from the store are other people's input:
  * validated here, and the shell renders names with textContent.
  */
 import { RULES } from '../sim';
@@ -132,6 +143,11 @@ const RETRY_DELAY_MS: readonly [number, number] = [250, 1_250];
 const READ_TIMEOUT_MS = 5_000;
 /** a 'playing' document is counted as left mid-round after this many rounds without an update */
 const ABANDONED_AFTER_ROUNDS = 2;
+/** the HTTP transport polls the seed's list this often while someone subscribes */
+const POLL_MS = 5_000;
+/** one localStorage key for the device id the HTTP transport writes under */
+const DEVICE_KEY = 'brightbyte.device.v1';
+const DEVICE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 const STATUSES: readonly LeaderStatus[] = ['playing', 'sold', 'dead'];
 
@@ -319,6 +335,42 @@ function platform(): Claude | null {
   return c && typeof c.use === 'function' ? c : null;
 }
 
+/** The leaderboard service's base URL, baked in at build time; null when the build has none. */
+function httpUrl(): string | null {
+  const raw: unknown = import.meta.env.VITE_LEADERBOARD_URL;
+  const url = typeof raw === 'string' ? raw.trim().replace(/\/+$/, '') : '';
+  return url || null;
+}
+
+function mintId(): string {
+  const c = typeof crypto !== 'undefined' ? crypto : null;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `d-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** the id of this page load when storage is blocked: the same for every board of the session */
+let sessionId: string | null = null;
+
+/**
+ * The HTTP transport's id for this browser: minted once into localStorage, so the best
+ * of the day survives a reload; a per-session id where storage is blocked.
+ */
+function deviceId(): string {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const kept = localStorage.getItem(DEVICE_KEY);
+      if (kept && DEVICE_ID_RE.test(kept)) return kept;
+      const id = mintId();
+      localStorage.setItem(DEVICE_KEY, id);
+      return id;
+    }
+  } catch {
+    // storage unavailable: the session id below
+  }
+  sessionId ??= mintId();
+  return sessionId;
+}
+
 /** The code of a rejected call; anything without a string code counts as 'unavailable' (db contract). */
 function errorCode(e: unknown): string {
   if (e && typeof e === 'object' && typeof (e as { code?: unknown }).code === 'string') return (e as { code: string }).code;
@@ -330,6 +382,9 @@ export function createLeaderboard(): Leaderboard {
   type Mode = 'pending' | 'shared' | 'local';
   let mode: Mode = 'pending';
   let db: DB | null = null;
+  /** the leaderboard service's base URL when the HTTP transport is in use (then `db` stays null) */
+  let http: string | null = null;
+  /** the store's viewer id, or the HTTP transport's device id */
   let viewerId: string | null = null;
   let canWrite = false;
   let stale = false;
@@ -354,6 +409,12 @@ export function createLeaderboard(): Leaderboard {
   let querySeed: number | null = null;
   let confirmed = false;
   let loadTimer: ReturnType<typeof setTimeout> | null = null;
+  // the HTTP transport's poll: runs while someone subscribes
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** bumped by stopQuery(), so a poll answered after its seed was dropped steps aside */
+  let pollSeq = 0;
+  /** when the last poll succeeded (0: never) */
+  let lastOk = 0;
 
   const listeners = new Set<(entries: LeaderEntry[]) => void>();
 
@@ -396,6 +457,15 @@ export function createLeaderboard(): Leaderboard {
   }
 
   const ready: Promise<void> = (async () => {
+    const url = httpUrl();
+    if (url) {
+      // the hosted game: the leaderboard service, ahead of the artifact store
+      http = url;
+      viewerId = deviceId();
+      mode = 'shared';
+      canWrite = true;
+      return;
+    }
     const claude = platform();
     if (claude) {
       try {
@@ -435,9 +505,22 @@ export function createLeaderboard(): Leaderboard {
         // already dead
       }
     }
+    stopPolling();
+    pollSeq++;
     querySeed = null;
     confirmed = false;
     clearLoadTimer();
+  }
+
+  /** Marks the list stale once 10 s pass without the transport confirming it. */
+  function armLoadTimer(): void {
+    if (confirmed || loadTimer !== null) return;
+    loadTimer = setTimeout(() => {
+      loadTimer = null;
+      if (destroyed || confirmed) return;
+      stale = true;
+      emit();
+    }, LOAD_TIMEOUT_MS);
   }
 
   /** The store refused or stopped answering: the local player alone, in localStorage, from here on. */
@@ -483,8 +566,116 @@ export function createLeaderboard(): Leaderboard {
     fallBack();
   }
 
+  // ---------------------------------------------------------------- the HTTP transport
+  /** The service's rows for a seed, or null when it did not answer well (never rejects). */
+  async function fetchRows(s: number): Promise<unknown[] | null> {
+    if (!http) return null;
+    try {
+      const res = await fetch(`${http}/scores?seed=${encodeURIComponent(String(s))}`, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return null;
+      const body: unknown = await res.json();
+      return Array.isArray(body) ? body : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function rowId(raw: unknown): string | null {
+    const id = raw && typeof raw === 'object' ? (raw as { deviceId?: unknown }).deviceId : null;
+    return typeof id === 'string' && id ? id : null;
+  }
+
+  /** One answer from the service: the seed's list, this device's row set aside as `mine`. */
+  function applyRows(rows: unknown[], s: number): void {
+    const next = new Map<string, ScoreDoc>();
+    let own: ScoreDoc | null = null;
+    for (const raw of rows) {
+      const id = rowId(raw);
+      const d = parseDoc(raw);
+      if (!id || !d || d.seed !== s) continue;
+      if (id === viewerId) own = d;
+      else next.set(id, d);
+    }
+    others = next;
+    mine = own ?? localDoc(s);
+    confirmed = true;
+    stale = false;
+    lastOk = Date.now();
+    clearLoadTimer();
+    emit();
+  }
+
+  /** One poll; a failure keeps the last list, and marks it stale once 10 s passed without a good answer. */
+  async function poll(): Promise<void> {
+    if (!http || destroyed || querySeed === null) return;
+    const s = querySeed;
+    const seq = pollSeq;
+    const rows = await fetchRows(s);
+    if (destroyed || seq !== pollSeq || querySeed !== s) return;
+    if (rows) applyRows(rows, s);
+    else if (confirmed && !stale && Date.now() - lastOk > LOAD_TIMEOUT_MS) {
+      stale = true;
+      emit();
+    }
+  }
+
+  function startPolling(): void {
+    if (!http || pollTimer !== null || querySeed === null || listeners.size === 0) return;
+    pollTimer = setInterval(() => void poll(), POLL_MS);
+    void poll();
+  }
+
+  function stopPolling(): void {
+    if (pollTimer !== null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  /** The HTTP transport's query: the seed to poll; a new seed drops the old list. */
+  function ensureHttpQuery(s: number): void {
+    if (querySeed === s) return;
+    stopQuery();
+    others = new Map();
+    mine = null;
+    querySeed = s;
+    armLoadTimer();
+    startPolling();
+  }
+
+  /** One PUT; a refused body stops writing, anything else is retried once. True when the write landed. */
+  async function sendHttp(body: ScoreDoc, mayRetry: boolean): Promise<boolean> {
+    if (!http || !viewerId) return false;
+    let status = 0;
+    try {
+      const res = await fetch(`${http}/scores/${encodeURIComponent(viewerId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) return true;
+      status = res.status;
+    } catch {
+      status = 0;
+    }
+    if (status === 400 || status === 413) {
+      // a well-formed write refused: a document the service will not take; read-only from here on
+      stopWriting();
+      return false;
+    }
+    // unreachable, a 5xx, a rate limit: retry once after a short randomized delay
+    if (!mayRetry) return false;
+    await sleep(RETRY_DELAY_MS[0] + Math.random() * (RETRY_DELAY_MS[1] - RETRY_DELAY_MS[0]));
+    if (destroyed || mode !== 'shared' || !canWrite) return false;
+    return sendHttp(body, false);
+  }
+
   /** Subscribe once per seed; a new seed (a new game) replaces the listener. */
   function ensureQuery(s: number): void {
+    if (http) {
+      ensureHttpQuery(s);
+      return;
+    }
     if (!db || (unsubscribeQuery && querySeed === s)) return;
     stopQuery();
     others = new Map();
@@ -508,14 +699,7 @@ export function createLeaderboard(): Leaderboard {
       return;
     }
     unsubscribeQuery = unsub;
-    if (!confirmed) {
-      loadTimer = setTimeout(() => {
-        loadTimer = null;
-        if (destroyed || confirmed) return;
-        stale = true;
-        emit();
-      }, LOAD_TIMEOUT_MS);
-    }
+    armLoadTimer();
   }
 
   /** The store refused this viewer's writes: read-only from here on, the run kept in this browser so its best survives a reload. */
@@ -588,11 +772,19 @@ export function createLeaderboard(): Leaderboard {
     if (writing) return;
     writing = true;
     try {
-      while (dirty && !destroyed && mode === 'shared' && canWrite && db && viewerId && me && registering === 0) {
+      while (dirty && !destroyed && mode === 'shared' && canWrite && (db || http) && viewerId && me && registering === 0) {
         dirty = false;
         const body: ScoreDoc = { ...me };
         const json = JSON.stringify(body);
         if (json === lastSent) continue;
+        if (http || !db) {
+          if (await sendHttp(body, true)) {
+            lastSent = json;
+            // the list the others see changed: read it back at once
+            if (querySeed !== null) void poll();
+          }
+          continue;
+        }
         let ref: DocumentReference;
         try {
           ref = db.doc(`${COLLECTION}/${viewerId}`);
@@ -612,6 +804,20 @@ export function createLeaderboard(): Leaderboard {
    * load today; 0 when there is none, it is on another seed, or it cannot be read in time.
    */
   async function storedBest(s: number): Promise<number> {
+    if (http && viewerId) {
+      try {
+        const rows = await withTimeout(fetchRows(s), READ_TIMEOUT_MS);
+        if (!rows) return 0;
+        for (const raw of rows) {
+          if (rowId(raw) !== viewerId) continue;
+          const d = parseDoc(raw);
+          return d && d.seed === s ? d.best : 0;
+        }
+      } catch {
+        // slow: the run is registered without it
+      }
+      return 0;
+    }
     if (!db || !viewerId) return 0;
     let ref: DocumentReference;
     try {
@@ -714,8 +920,10 @@ export function createLeaderboard(): Leaderboard {
     if (destroyed) return () => {};
     listeners.add(cb);
     cb(current());
+    startPolling();
     return () => {
       listeners.delete(cb);
+      if (listeners.size === 0) stopPolling();
     };
   }
 

@@ -363,12 +363,20 @@ function knockAdvice(state: GameState, card: Card): CardAdvice | null {
   const amount = num(card.data.amount);
   const r = runway(state);
   const left = monthsLeft(state);
-  if (r < COACH.knockTakeRunwayMonths) return pickChoice(state, card, EQUITY, `${months(r)} months of cash left.`);
-  if (share <= COACH.knockCheapShare && left >= COACH.knockSpendMonthsLeft) {
-    return pickChoice(state, card, EQUITY, `${pct(share)} for ${money(amount)} is cheap and ${leftText(left)}.`);
+  // DESIGN.md 18 rule 1: cash below zero at a month-end close scores 0, so "would not reach the buzzer" wins over everything
+  if (diesBeforeBuzzer(state)) {
+    return pickChoice(state, card, EQUITY, `${months(r)} months of cash against ${months(left)} to the buzzer: without it you run out.`);
   }
   if (left < COACH.knockDeclineMonthsLeft) {
     return pickChoice(state, card, DECLINE, `Only ${months(left)} months remain: money that arrives now cannot be used.`);
+  }
+  if (r < COACH.knockTakeRunwayMonths) return pickChoice(state, card, EQUITY, `${months(r)} months of cash left.`);
+  if (share <= COACH.knockCheapShare && left >= COACH.knockSpendMonthsLeft) {
+    // cheap money is only worth its slice while there is something to buy with it (the Playbook: after the second investor, decline unless you can spend it)
+    if (state.rounds.length < COACH.knocksTaken || state.cash + amount <= COACH.growthCash) {
+      return pickChoice(state, card, EQUITY, `${pct(share)} for ${money(amount)} is cheap and ${leftText(left)}.`);
+    }
+    return pickChoice(state, card, DECLINE, `${money(state.cash)} in the bank and nothing left to buy: keep your ${pct(1 - share)}.`);
   }
   if (share > COACH.knockDearShare && r > COACH.knockDearRunwayMonths) {
     return pickChoice(state, card, DECLINE, `${pct(share)} is too much for ${money(amount)} when ${runwayText(state)}.`);
@@ -381,8 +389,16 @@ function lifelineAdvice(state: GameState, card: Card): CardAdvice | null {
   const share = num(card.data.share);
   if (state.cash < 0) return pickChoice(state, card, EQUITY, `The bank balance is ${money(state.cash)}: take it or the bank closes you.`);
   const r = runway(state);
-  if (r < COACH.lifelineRunwayMonths) return pickChoice(state, card, EQUITY, `${months(r)} months of cash left: take it or the bank closes you.`);
+  // the bank only closes you at a month-end close with cash below zero; a short runway that outlasts the buzzer is not a crisis
+  if (diesBeforeBuzzer(state)) return pickChoice(state, card, EQUITY, `${months(r)} months of cash against ${months(monthsLeft(state))} to the buzzer: take it or the bank closes you.`);
   return pickChoice(state, card, DECLINE, `${runwayText(state)}: you can reach the buzzer without giving up ${pct(share)}.`);
+}
+
+/** Cash runs out before the buzzer: the runway is shorter than the month-end closes still to come (infinite rounds never die this way). */
+function diesBeforeBuzzer(state: GameState): boolean {
+  const left = monthsLeft(state);
+  if (!Number.isFinite(left)) return false;
+  return runway(state) < Math.ceil(left);
 }
 
 /** Late payer: press when cash < 3 months of costs, else wait. */

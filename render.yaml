@@ -1,0 +1,51 @@
+# Render Blueprint for Silicon Valley (https://siliconvalley.party).
+# Static site (the game) + Node web service (the shared leaderboard) + Postgres.
+# Spec: https://render.com/docs/blueprint-spec
+services:
+  # The game: Vite build, published from dist/.
+  - type: web
+    name: silicon-valley
+    runtime: static
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    staticPublishPath: dist
+    domains:
+      - siliconvalley.party
+      - www.siliconvalley.party
+    envVars:
+      # Baked into the bundle at build time; the HTTP leaderboard transport is used when set.
+      # `fromService ... property: host` would give the service's private-network hostname,
+      # which the browser cannot reach, so this is the public onrender.com URL: replace it
+      # with the URL the Dashboard shows for silicon-valley-api (or its custom domain).
+      - key: VITE_LEADERBOARD_URL
+        value: https://silicon-valley-api.onrender.com
+
+  # The leaderboard service (server/).
+  - type: web
+    name: silicon-valley-api
+    runtime: node
+    rootDir: server
+    region: frankfurt
+    plan: starter
+    buildCommand: npm ci || npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - server/**
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: silicon-valley-db
+          property: connectionString
+      - key: ALLOWED_ORIGINS
+        value: https://siliconvalley.party,https://www.siliconvalley.party,http://localhost:5173
+
+databases:
+  - name: silicon-valley-db
+    region: frankfurt
+    # basic-256mb is the smallest paid plan; `free` also works but a free instance expires after 30 days.
+    plan: basic-256mb
+    databaseName: silicon_valley
+    user: silicon_valley

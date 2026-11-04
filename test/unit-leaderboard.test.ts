@@ -173,6 +173,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const b of boards.splice(0)) b.destroy();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -630,6 +631,321 @@ describe('leaderboard on the shared store', () => {
     expect(fake.setCalls).toBe(calls);
     expect(lb.subscribe(() => seen.push([]))).toBeTypeOf('function');
     expect(seen.length).toBe(count);
+  });
+});
+
+// ---------------------------------------------------------------- the HTTP transport
+interface FakeCall {
+  method: string;
+  url: string;
+  body?: Record<string, unknown>;
+}
+
+interface FakeApi {
+  calls: FakeCall[];
+  /** rows the service holds, by `${deviceId}:${seed}` */
+  rows: Map<string, Record<string, unknown>>;
+  /** every request rejects (the service is unreachable) */
+  fail: boolean;
+  /** the status a PUT answers with */
+  putStatus: number;
+  puts(): FakeCall[];
+  gets(): FakeCall[];
+  /** another player's page wrote this row */
+  put(deviceId: string, body: Record<string, unknown>): void;
+}
+
+const API = 'http://api.test';
+const DEVICE_KEY = 'brightbyte.device.v1';
+
+/** The leaderboard service behind a fetch stub, and the build-time URL that selects the HTTP transport. */
+function stubApi(url = `${API}/`): FakeApi {
+  const fake: FakeApi = {
+    calls: [],
+    rows: new Map(),
+    fail: false,
+    putStatus: 200,
+    puts: () => fake.calls.filter((c) => c.method === 'PUT'),
+    gets: () => fake.calls.filter((c) => c.method === 'GET'),
+    put: (deviceId, body) => fake.rows.set(`${deviceId}:${String(body.seed)}`, { deviceId, ...body }),
+  };
+  const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL, init?: RequestInit): Promise<Response> => {
+      const u = String(input);
+      const method = init?.method ?? 'GET';
+      const call: FakeCall = { method, url: u };
+      if (typeof init?.body === 'string') call.body = JSON.parse(init.body) as Record<string, unknown>;
+      fake.calls.push(call);
+      await Promise.resolve(); // a real service answers later
+      if (fake.fail) throw new TypeError('fetch failed');
+      if (method === 'PUT') {
+        const m = u.match(/^(.*)\/scores\/([^/?]+)$/);
+        if (!m || m[1] !== API || !call.body) return json(404, { error: 'not found' });
+        if (fake.putStatus !== 200) return json(fake.putStatus, { error: 'refused' });
+        const row: Record<string, unknown> = { deviceId: decodeURIComponent(m[2]), ...call.body, updatedAt: Date.now() };
+        fake.rows.set(`${String(row.deviceId)}:${String(row.seed)}`, row);
+        return json(200, row);
+      }
+      const parsed = new URL(u);
+      if (`${parsed.origin}${parsed.pathname}` !== `${API}/scores`) return json(404, { error: 'not found' });
+      const seed = Number(parsed.searchParams.get('seed'));
+      return json(200, [...fake.rows.values()].filter((r) => r.seed === seed));
+    }),
+  );
+  vi.stubEnv('VITE_LEADERBOARD_URL', url);
+  return fake;
+}
+
+describe('leaderboard over HTTP (VITE_LEADERBOARD_URL)', () => {
+  it('is chosen over the artifact store when the URL is set; start PUTs the run once under a device id kept in localStorage', async () => {
+    const store = createFakeDb();
+    stubViewer(store);
+    const api = stubApi();
+    const lb = make();
+    await lb.ready;
+    expect(lb.shared).toBe(true);
+    expect(lb.canWrite).toBe(true);
+    await lb.start('  Mike  ', SEED, 'mint');
+    await flush();
+    expect(store.setCalls).toBe(0);
+    expect(store.listeners.size).toBe(0);
+    const id = localStorage.getItem(DEVICE_KEY);
+    expect(id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    const puts = api.puts();
+    expect(puts).toHaveLength(1);
+    // the trailing slash of the configured URL is dropped
+    expect(puts[0].url).toBe(`${API}/scores/${encodeURIComponent(id as string)}`);
+    expect(puts[0].body).toEqual({ name: 'Mike', color: 'mint', seed: SEED, value: 0, score: 0, best: 0, month: 0, status: 'playing', updatedAt: expect.any(Number) });
+    // the same id on the next board (the next page load)
+    const lb2 = make();
+    await lb2.start('Mike', SEED);
+    await flush();
+    expect(api.puts()[1].url).toBe(puts[0].url);
+  });
+
+  it('post coalesces a burst into one in-flight write and the latest state, and reads the list back after each write', async () => {
+    const api = stubApi(API);
+    const lb = make();
+    await lb.start('Mike', SEED);
+    await flush();
+    const before = api.puts().length;
+    const getsBefore = api.gets().length;
+    lb.post({ value: 100, score: 100, month: 1, status: 'playing' });
+    lb.post({ value: 200, score: 200, month: 2, status: 'playing' });
+    lb.post({ value: 300, score: 300, month: 3, status: 'playing' });
+    await flush();
+    const writes = api.puts().length - before;
+    expect(writes).toBeGreaterThanOrEqual(1);
+    expect(writes).toBeLessThanOrEqual(2);
+    const id = localStorage.getItem(DEVICE_KEY) as string;
+    expect(api.rows.get(`${id}:${SEED}`)).toMatchObject({ name: 'Mike', seed: SEED, value: 300, score: 300, month: 3, status: 'playing' });
+    // every landed write is followed by one read of the seed's list
+    expect(api.gets().length - getsBefore).toBe(writes);
+    expect(api.gets()[api.gets().length - 1].url).toBe(`${API}/scores?seed=${SEED}`);
+    // nothing changed: nothing written
+    lb.post({ value: 300, score: 300, month: 3, status: 'playing' });
+    await flush();
+    expect(api.puts().length).toBe(before + writes);
+    // the end of the round raises best
+    lb.post({ value: 300, score: 150, month: 3, status: 'sold' });
+    await flush();
+    expect(api.rows.get(`${id}:${SEED}`)).toMatchObject({ score: 150, status: 'sold', best: 150 });
+  });
+
+  it('subscribe polls the seed every 5 s while someone listens, ranks by standing and flags me', async () => {
+    vi.useFakeTimers();
+    const api = stubApi();
+    api.put('d2', doc({ name: 'Sold', status: 'sold', score: 500 }));
+    api.put('d3', doc({ name: 'Beta', score: 450 }));
+    api.put('d4', doc({ name: 'Alpha', score: 450 }));
+    api.put('d5', doc({ name: 'Elsewhere', score: 5000, seed: SEED + 1 }));
+    api.put('d6', { name: 'Broken', seed: SEED, status: 'winning' });
+    api.put('d7', doc({ name: 'Old', status: 'playing', score: 900, updatedAt: Date.now() - RULES.roundSeconds * 1000 * 3 }));
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    const off = lb.subscribe((entries) => seen.push(entries));
+    expect(seen).toEqual([[]]);
+    expect(api.gets()).toHaveLength(0);
+    await lb.start('Mike', SEED);
+    await flush();
+    const id = localStorage.getItem(DEVICE_KEY) as string;
+    const last = seen[seen.length - 1];
+    expect(last.map((e) => e.id)).toEqual(['d2', 'd4', 'd3', id, 'd7']);
+    expect(last.map((e) => e.me)).toEqual([false, false, false, true, false]);
+    expect(last[4].abandoned).toBe(true);
+    expect(lb.stale).toBe(false);
+    // another player's change arrives on the next poll, not before
+    const gets = api.gets().length;
+    api.put('d3', doc({ name: 'Beta', status: 'sold', score: 700 }));
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['d2', 'd4', 'd3', id, 'd7']);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.gets().length).toBe(gets + 1);
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['d3', 'd2', 'd4', id, 'd7']);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.gets().length).toBe(gets + 2);
+    // nobody listening: no polling
+    off();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(api.gets().length).toBe(gets + 2);
+    // a listener again: one poll at once, then every 5 s
+    lb.subscribe(() => {});
+    await flush();
+    expect(api.gets().length).toBe(gets + 3);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.gets().length).toBe(gets + 4);
+  });
+
+  it("watch polls today's players before a run starts; the day rolling over moves the poll to the new seed", async () => {
+    vi.useFakeTimers();
+    const api = stubApi();
+    api.put('d2', doc({ name: 'Today', status: 'sold', score: 500 }));
+    api.put('d3', doc({ name: 'Tomorrow', status: 'sold', score: 50, seed: SEED + 1 }));
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    lb.watch(SEED);
+    await flush();
+    expect(api.puts()).toHaveLength(0);
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['d2']);
+    lb.watch(SEED + 1);
+    await flush();
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['d3']);
+    expect(api.gets()[api.gets().length - 1].url).toBe(`${API}/scores?seed=${SEED + 1}`);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.gets()[api.gets().length - 1].url).toBe(`${API}/scores?seed=${SEED + 1}`);
+  });
+
+  it('a failed poll keeps the last list; the list is stale after 10 s without a good answer, fresh again on the next good one', async () => {
+    vi.useFakeTimers();
+    const api = stubApi();
+    api.put('d2', doc({ name: 'Other', status: 'sold', score: 500 }));
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    await lb.start('Mike', SEED);
+    await flush();
+    expect(seen[seen.length - 1].map((e) => e.name)).toEqual(['Other', 'Mike']);
+    api.fail = true;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(seen[seen.length - 1].map((e) => e.name)).toEqual(['Other', 'Mike']);
+    expect(lb.stale).toBe(false);
+    expect(lb.shared).toBe(true);
+    const count = seen.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(lb.stale).toBe(true);
+    expect(seen.length).toBe(count + 1);
+    expect(seen[seen.length - 1].map((e) => e.name)).toEqual(['Other', 'Mike']);
+    api.fail = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(lb.stale).toBe(false);
+    expect(lb.canWrite).toBe(true);
+  });
+
+  it('marks the list stale 10 s after subscribing when the service never answers', async () => {
+    vi.useFakeTimers();
+    const api = stubApi();
+    api.fail = true;
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    await lb.start('Mike', SEED);
+    await flush();
+    expect(lb.stale).toBe(false);
+    expect(seen[seen.length - 1].map((e) => e.name)).toEqual(['Mike']);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(lb.stale).toBe(true);
+    expect(lb.shared).toBe(true);
+    expect(seen[seen.length - 1].map((e) => e.name)).toEqual(['Mike']);
+  });
+
+  it('a new page load reads the stored best from the service before its first write', async () => {
+    localStorage.setItem(DEVICE_KEY, 'dev-1');
+    const api = stubApi();
+    api.put('dev-1', doc({ name: 'Mike', status: 'sold', score: 300, best: 500 }));
+    const lb = make();
+    lb.post({ value: 1, score: 1, month: 1, status: 'playing' }); // before start: ignored
+    await lb.start('Mike', SEED);
+    await flush();
+    expect(api.puts()).toHaveLength(1);
+    expect(api.puts()[0].url).toBe(`${API}/scores/dev-1`);
+    expect(api.puts()[0].body).toMatchObject({ best: 500, score: 0, status: 'playing' });
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    expect(seen[0].map((e) => e.id)).toEqual(['dev-1']);
+    expect(seen[0][0]).toMatchObject({ me: true, best: 500 });
+  });
+
+  it('a refused write (400) flips canWrite and keeps reading; an unreachable service is retried once', async () => {
+    vi.useFakeTimers();
+    const api = stubApi();
+    api.put('d2', doc({ name: 'Other', score: 10 }));
+    api.putStatus = 400;
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    await lb.start('Mike', SEED);
+    await flush();
+    expect(api.puts()).toHaveLength(1);
+    expect(lb.canWrite).toBe(false);
+    expect(lb.shared).toBe(true);
+    expect(seen[seen.length - 1].map((e) => e.name)).toEqual(['Other', 'Mike']);
+    lb.post({ value: 5, score: 5, month: 1, status: 'playing' });
+    await flush();
+    expect(api.puts()).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem(KEY) as string)[String(SEED)]).toMatchObject({ name: 'Mike', value: 5 });
+    // a fresh board: the service unreachable for the write, back for the retry
+    const api2 = stubApi();
+    const lb2 = make();
+    await lb2.start('Mike', SEED);
+    await flush();
+    expect(api2.puts()).toHaveLength(1);
+    api2.fail = true;
+    lb2.post({ value: 7, score: 7, month: 1, status: 'playing' });
+    await flush();
+    expect(api2.puts()).toHaveLength(2);
+    api2.fail = false;
+    await vi.advanceTimersByTimeAsync(1_300);
+    expect(api2.puts()).toHaveLength(3);
+    expect(lb2.canWrite).toBe(true);
+    const id = localStorage.getItem(DEVICE_KEY) as string;
+    expect(api2.rows.get(`${id}:${SEED}`)).toMatchObject({ value: 7 });
+  });
+
+  it('a blocked localStorage gets a per-session device id', async () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+      setItem: () => {
+        throw new Error('blocked');
+      },
+    });
+    const api = stubApi();
+    const lb = make();
+    await lb.start('Mike', SEED);
+    await flush();
+    expect(api.puts()).toHaveLength(1);
+    const id = decodeURIComponent(api.puts()[0].url.slice(`${API}/scores/`.length));
+    expect(id).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    const lb2 = make();
+    await lb2.start('Mike', SEED);
+    await flush();
+    expect(api.puts()[1].url).toBe(api.puts()[0].url);
+  });
+
+  it('destroy stops the poll', async () => {
+    vi.useFakeTimers();
+    const api = stubApi();
+    const lb = make();
+    lb.subscribe(() => {});
+    await lb.start('Mike', SEED);
+    await flush();
+    const gets = api.gets().length;
+    lb.destroy();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(api.gets().length).toBe(gets);
   });
 });
 
