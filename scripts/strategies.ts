@@ -6,7 +6,8 @@
  * only, so the strategies can do exactly what a player at the UI can do and
  * nothing more. DESIGN.md section 16 names the five engine strategies (idle,
  * engineerFirst, salesFirst, balanced, reckless) and the tournament ones (tIdle,
- * tPlayer, tTakeAll, tDeclineAll, tAggressive).
+ * tPlayer, tTakeAll, tDeclineAll, tAggressive); DESIGN.md 18 makes tPlayer the
+ * coach's follower, so the harness measures the advice itself.
  *
  * Two rulesets (RULES in config.ts): the engine strategies play the full engine
  * (every department, raises, quits, loans, ads, all six events), the tournament
@@ -19,7 +20,7 @@
  * each), then advances the day. While a card blocks the clock the strategy is
  * asked again on the same day, so every strategy answers open cards first.
  */
-import { ASSET_KINDS, CONFIG, EVENT_TYPES, ROLES, RULES, advanceDay, canDispatch, createGame, dispatch, hintLine, roomRentForHire, selectors as S, setupCost, validSpots } from '../src/sim';
+import { ASSET_KINDS, CONFIG, EVENT_TYPES, ROLES, RULES, advanceDay, advise, adviseCard, canDispatch, createGame, dispatch, selectors as S, validSpots } from '../src/sim';
 import type { Action, Candidate, Card, CardChoice, CardKind, GameState, MonthBook, Person, Role, RoomSize, Rules } from '../src/sim';
 
 /** Which ruleset a strategy plays under: the full engine (DESIGN.md 1–16) or the published tournament (DESIGN.md 0). */
@@ -523,42 +524,21 @@ export const reckless: Strategy = {
 /** The five engine strategies of DESIGN.md 16; they play the full engine (`pnpm balance --full`). */
 export const engineStrategies: readonly Strategy[] = [idle, engineerFirst, salesFirst, balanced, reckless];
 
-// ---------------------------------------------------------------- the tournament strategies (DESIGN.md 0 and 16)
+// ---------------------------------------------------------------- the tournament strategies (DESIGN.md 0, 16 and 18)
 
-/** Tunables of the tournament strategies (strategy taste, not sim rules). */
+/** Tunables of the tournament strategies: the coach's own numbers (CONFIG.coach), so the follower measures the advice as given. */
 export const TOURNAMENT = {
-  /** the first support agent from this many customers (tickets exist: DESIGN.md 8) */
-  supportFromCustomers: 10,
-  /** a rep, a marketer or an agent is hired only when the cash left after the setup covers this many months of the cost run-rate the hire creates */
-  hireCoverMonths: 3,
-  /** the marketer is hired once the hint line points at Marketing (DESIGN.md 13: "Open Marketing"), under the cash rule; matched by this word */
-  marketingHint: /marketing/i,
-  /** the demo room once the bank holds more than this */
-  demoRoomCash: 100_000,
-  /** a server is bought when servers are short and this many months of costs stay in the bank afterwards */
-  serverKeepMonths: 1,
-  /** tPlayer: investor knocks taken, then every later scheduled knock declined; a lifeline (desperation knock) is always taken */
-  knocksTaken: 2,
-  /** tDeclineAll plans for no round: its hires need this many months of cover instead of hireCoverMonths */
-  unfundedCoverMonths: 6,
+  /**
+   * The coach's 'idea' advice (DESIGN.md 18 rules 8–9: the demo room, another engineer, another
+   * marketer) is followed once the bank holds more than this; 'now' and 'soon' advice always is.
+   */
+  ideaCash: CONFIG.coach.growthCash,
+  /** when the coach has no view on a scheduled knock: tPlayer takes this many rounds, then declines; a lifeline is always taken */
+  knocksTaken: CONFIG.coach.knocksTaken,
 };
 
 /** The department's fixed hire (DESIGN.md 0: desk, laptop and room come by themselves) when cash and the lot allow it. */
 const hireRoleStep = (state: GameState, role: Role): Action | null => okOrNull(state, { type: 'hireRole', role });
-
-/**
- * DESIGN.md 16's careful human: a hire only when the cash left after its setup (desk, laptop) covers
- * hireCoverMonths of the new cost run-rate, i.e. today's costs plus the salary and the rent of the
- * room the hire would open (both as the board shows them: tournament.setupCost / roomRentForHire).
- */
-function canCoverHire(state: GameState, role: Role, coverMonths: number): boolean {
-  const after = state.cash - setupCost(state, role);
-  const runRate = monthlyCost(state) + RULES.hire[role].salary + roomRentForHire(state, role);
-  return after >= coverMonths * runRate;
-}
-
-/** One engineer, hired on the first day the strategy acts (day 0). */
-const firstEngineer = (state: GameState): Action | null => (hired(state, 'product') < 1 ? hireRoleStep(state, 'product') : null);
 
 /** An engineer every month cash allows: one hire per calendar month, no catch-up for a month that could not afford one. */
 function engineerEveryMonth(state: GameState): Action | null {
@@ -568,45 +548,70 @@ function engineerEveryMonth(state: GameState): Action | null {
 }
 
 /**
- * The tournament player's other moves (DESIGN.md 16): a rep when a prospect waits, none is hired and
- * the cash covers three months of the new run-rate; a marketer once the hint line says "Open
- * Marketing" (the game's own advice, DESIGN.md 13) under the same cash rule; support from ten
- * customers under the same cash rule. One hire a day, in that order (the hint itself puts the
- * waiting prospect before marketing). A server whenever servers are short and the cash allows (a
- * month of costs stays in the bank); the demo room once cash tops $100k; the assets can share the day.
+ * The coach's move for today (DESIGN.md 18, rules 2–11): the advised action when its urgency
+ * qualifies ('now' and 'soon' always, 'idea' above TOURNAMENT.ideaCash) and the sim accepts it.
+ * One tap on the coach line a day: the coach names one action, the follower does that one.
  */
-function tournamentSteps(state: GameState, coverMonths: number): Action[] {
-  const out: Action[] = [];
-  const push = (a: Action | null): void => { if (a) out.push(a); };
-  push(serverStep(state, TOURNAMENT.serverKeepMonths));
-  if (!S.hasDemoRoom(state) && state.cash > TOURNAMENT.demoRoomCash) push(okOrNull(state, { type: 'buyDemoRoom' }));
-  if (state.prospects.length > 0 && hired(state, 'sales') < 1) {
-    if (canCoverHire(state, 'sales', coverMonths)) push(hireRoleStep(state, 'sales'));
-  } else if (hired(state, 'marketing') < 1 && TOURNAMENT.marketingHint.test(hintLine(state))) {
-    if (canCoverHire(state, 'marketing', coverMonths)) push(hireRoleStep(state, 'marketing'));
-  } else if (state.customers.length >= TOURNAMENT.supportFromCustomers && hired(state, 'support') < 1 && canCoverHire(state, 'support', coverMonths)) {
-    push(hireRoleStep(state, 'support'));
-  }
-  return out;
+function coachStep(state: GameState): Action | null {
+  const advice = advise(state);
+  if (!advice.action) return null;
+  if (advice.urgency === 'idea' && state.cash <= TOURNAMENT.ideaCash) return null;
+  return okOrNull(state, advice.action);
 }
 
 /**
- * A tournament strategy: nothing but the tournament actions, servers and card answers (DESIGN.md 0).
- * `engineers` is its engineering policy, `knock` its answer to investors, `coverMonths` the cash
- * cover its hires need; events per sensibleEvent (the tournament only has the late payer, press and
- * outage: wait, and pay for the push or the fix when two months of costs stay in the bank).
+ * The coach's answer to the open card (DESIGN.md 18, rule 1: adviseCard), or the strategy's own
+ * answer when the coach has no recommendation for it (adviseCard is null between its take and
+ * decline conditions, and for cards the tournament never opens).
  */
-function tournamentStrategy(name: string, knock: CardRules['knock'], engineers: (state: GameState) => Action | null, coverMonths = (): number => TOURNAMENT.hireCoverMonths): Strategy {
+function coachCard(state: GameState, own: CardRules): Action | null {
+  const card = state.card;
+  if (!card) return null;
+  const rec = adviseCard(state, card);
+  if (rec) {
+    const action: Action = { type: 'card', choiceId: rec.choiceId };
+    if (ok(state, action)) return action;
+  }
+  return answerCard(state, own);
+}
+
+/**
+ * The knock answer a careful founder gives when the coach has no view on the card: the first
+ * knocksTaken rounds taken, every later scheduled knock declined; a lifeline (DESIGN.md 10: the
+ * desperation knock at under two months of runway) is always taken, since declining it is the end
+ * of the company and no careful founder picks that at a card.
+ */
+function playerKnock(state: GameState, card: Card): KnockWant {
+  if (card.kind === 'desperation') return 'equity';
+  return state.rounds.length < TOURNAMENT.knocksTaken ? 'equity' : 'decline';
+}
+
+/**
+ * A coach follower (DESIGN.md 18): nothing but the tournament actions and card answers (DESIGN.md
+ * 0). Every day it does what the coach says (coachStep) and answers cards as the coach recommends;
+ * `knock` replaces the coach's answer on investor cards (scheduled and lifelines) for the
+ * strategies that always take or always decline; `engineers` is an engineering policy of its own
+ * that runs before the coach and owns the engineer hires (the coach's "hire an engineer" is
+ * its call already). Events the coach has no view on go to sensibleEvent (wait for a late payer;
+ * pay for the push or the fix when two months of costs stay in the bank).
+ */
+function coachFollower(name: string, opts: { knock?: CardRules['knock']; engineers?: (state: GameState) => Action | null } = {}): Strategy {
+  const own: CardRules = { knock: opts.knock ?? playerKnock, event: sensibleEvent };
   return {
     name,
     engine: 'tournament',
     act(state) {
-      const card = answerCard(state, { knock, event: sensibleEvent });
-      if (card) return [card];
+      const card = state.card;
+      if (card) {
+        const investor = card.kind === 'knock' || card.kind === 'desperation';
+        const answer = opts.knock && investor ? answerCard(state, own) : coachCard(state, own);
+        return answer ? [answer] : [];
+      }
       const out: Action[] = [];
-      const engineer = engineers(state);
+      const engineer = opts.engineers ? opts.engineers(state) : null;
       if (engineer) out.push(engineer);
-      out.push(...tournamentSteps(state, coverMonths()));
+      const coach = coachStep(state);
+      if (coach && !(engineer && coach.type === 'hireRole' && coach.role === 'product')) out.push(coach);
       return out;
     },
   };
@@ -623,34 +628,22 @@ export const tIdle: Strategy = {
 };
 
 /**
- * DESIGN.md 16: a careful human who follows the game's own advice. A scheduled knock is taken while
- * fewer than knocksTaken rounds are in the bank and declined after; a lifeline (DESIGN.md 10: the
- * desperation knock at under two months of runway) is always taken, since declining it is the end
- * of the company and no careful founder picks that at a card.
+ * DESIGN.md 18's scripted tournament player: the coach's follower. Each day it dispatches the
+ * coach's action (advise) when the urgency is 'now' or 'soon', and 'idea' once the bank holds more
+ * than ideaCash; it answers every card as the coach recommends (adviseCard), and where the coach
+ * has no recommendation it takes the first two knocks, declines the later ones, takes every
+ * lifeline and answers events sensibly. The balance harness therefore measures the advice.
  */
-function playerKnock(state: GameState, card: Card): KnockWant {
-  if (card.kind === 'desperation') return 'equity';
-  return state.rounds.length < TOURNAMENT.knocksTaken ? 'equity' : 'decline';
-}
+export const tPlayer: Strategy = coachFollower('tPlayer');
 
-/**
- * DESIGN.md 16's scripted tournament player, a plausible careful human who follows the hint line: an
- * engineer on day 0; a rep only when a prospect waits and the cash covers three months of the new cost
- * run-rate; a marketer once the hint says "Open Marketing", under the same cash rule; support from ten
- * customers under the same cash rule; a server when short and the cash allows; the demo room once cash
- * tops $100k; the first two investor knocks taken, every later scheduled knock declined, every lifeline
- * taken.
- */
-export const tPlayer: Strategy = tournamentStrategy('tPlayer', playerKnock, firstEngineer);
+/** The coach's follower who takes every knock, scheduled or lifeline. */
+export const tTakeAll: Strategy = coachFollower('tTakeAll', { knock: () => 'equity' });
 
-/** tPlayer, but every knock is taken. */
-export const tTakeAll: Strategy = tournamentStrategy('tTakeAll', () => 'equity', firstEngineer);
+/** The coach's follower who declines every knock, lifelines included. */
+export const tDeclineAll: Strategy = coachFollower('tDeclineAll', { knock: () => 'decline' });
 
-/** tPlayer's moves for a founder who plans for no round (unfundedCoverMonths of cover per hire), every knock declined. */
-export const tDeclineAll: Strategy = tournamentStrategy('tDeclineAll', () => 'decline', firstEngineer, () => TOURNAMENT.unfundedCoverMonths);
-
-/** An engineer every month cash allows on top of tPlayer's other moves, every knock taken. */
-export const tAggressive: Strategy = tournamentStrategy('tAggressive', () => 'equity', engineerEveryMonth);
+/** An engineer every month cash allows on top of the coach's other moves, every knock taken. */
+export const tAggressive: Strategy = coachFollower('tAggressive', { knock: () => 'equity', engineers: engineerEveryMonth });
 
 /** The tournament strategies of DESIGN.md 16; they play the published rules (`pnpm balance`). */
 export const tournamentStrategies: readonly Strategy[] = [tIdle, tPlayer, tTakeAll, tDeclineAll, tAggressive];
@@ -673,6 +666,9 @@ function mulberry32(seed: number): () => number {
 
 /** Per-day probabilities of each random move. */
 export interface RandomPolicyOptions {
+  /** the ruleset the policy plays under (default 'full'); under 'tournament' it uses the tournament actions only (DESIGN.md 0) */
+  engine?: Engine;
+  // the full engine
   hire?: number;
   room?: number;
   closeRoom?: number;
@@ -684,13 +680,27 @@ export interface RandomPolicyOptions {
   founderRole?: number;
   prepay?: number;
   sellCompany?: number;
+  // the tournament: a fixed hire into a random department, the newest hire of a random department let go, a server, the demo room
+  hireRole?: number;
+  fireRole?: number;
+  server?: number;
+  demoRoom?: number;
+  /**
+   * The rich uncle (the debug +$100k, booked as financing through the ledger): the tournament's own
+   * economics never pay for a lot full of rooms, so the uncle funds the hiring spree that fills the
+   * ground floor, builds the second floor and, with the firing, empties rooms (DESIGN.md 0: rooms
+   * auto-close, upstairs). The identities have to hold with his money in the books like any other.
+   */
+  uncle?: number;
   /** spend (hire / room) only while cash covers this many months of costs; keeps runs alive longer */
   spendRunway?: number;
 }
 
-const RANDOM_DEFAULTS: Required<RandomPolicyOptions> = {
+const RANDOM_DEFAULTS: Required<Omit<RandomPolicyOptions, 'engine'>> = {
   hire: 0.03, room: 0.012, closeRoom: 0.003, buy: 0.03, sellAsset: 0.01, adBudget: 0.02, fire: 0.008,
-  raise: 0.1, founderRole: 0.004, prepay: 0.01, sellCompany: 0.0004, spendRunway: 2,
+  raise: 0.1, founderRole: 0.004, prepay: 0.01, sellCompany: 0.0004,
+  hireRole: 0.2, fireRole: 0.03, server: 0.05, demoRoom: 0.02, uncle: 0.06,
+  spendRunway: 2,
 };
 
 /**
@@ -698,18 +708,85 @@ const RANDOM_DEFAULTS: Required<RandomPolicyOptions> = {
  * candidate, place a random valid room, buy a random asset, sell a random asset,
  * set the ad budget, fire someone, answer raises and cards at random — every
  * action checked with canDispatch before it is emitted. Deterministic given
- * `policySeed` and the sequence of states it sees.
+ * `policySeed` and the sequence of states it sees. Under `engine: 'tournament'`
+ * the moves are the tournament's own: hireRole, fireRole, a server, the demo
+ * room, card answers, and the rich uncle's money.
  */
 export function randomStrategy(policySeed: number, options: RandomPolicyOptions = {}): Strategy {
-  const p = { ...RANDOM_DEFAULTS, ...options };
+  const { engine = 'full', ...rest } = options;
+  const p = { ...RANDOM_DEFAULTS, ...rest };
   const rnd = mulberry32(policySeed);
   const pick = <T>(arr: readonly T[]): T | undefined => (arr.length ? arr[Math.floor(rnd() * arr.length)] : undefined);
   const roomKinds: readonly (Role | 'demo')[] = [...ROLES, 'demo'];
   const sizes: readonly RoomSize[] = ['small', 'large'];
   const adSteps = Math.floor(CONFIG.marketing.adMax / CONFIG.marketing.adStep);
+
+  const fullMoves = (state: GameState, consider: (a: Action) => void, out: Action[]): void => {
+    const canSpend = runwayWith(state) > p.spendRunway;
+    if (rnd() < p.hire && canSpend) {
+      const role = pick(ROLES);
+      const cand = role ? pick(state.candidates[role]) : undefined;
+      if (cand) {
+        const hire: Action = { type: 'hire', candidateId: cand.id };
+        if (ok(state, hire)) out.push(hire);
+        else {
+          // no seat for them: a desk in a random room that takes the role is the valid move toward that hire
+          const room = pick(state.rooms.filter((r) => S.roomAcceptsRole(r, cand.role)));
+          if (room) consider({ type: 'buyAsset', kind: 'desk', roomId: room.id });
+        }
+      }
+    }
+    if (rnd() < p.room && canSpend) {
+      const kind = pick(roomKinds) ?? 'product';
+      const size = pick(sizes) ?? 'small';
+      const floor: 0 | 1 = state.floors === 2 && rnd() < 0.5 ? 1 : 0;
+      const spot = pick(validSpots(state, kind, size, floor));
+      if (spot) consider({ type: 'placeRoom', kind, size, floor, x: spot.x, y: spot.y });
+    }
+    if (rnd() < p.closeRoom) {
+      const room = pick(state.rooms);
+      if (room) consider({ type: 'closeRoom', roomId: room.id });
+    }
+    if (rnd() < p.buy) {
+      const kind = pick(ASSET_KINDS) ?? 'laptop';
+      const room = kind === 'desk' ? pick(state.rooms) : undefined;
+      consider(room ? { type: 'buyAsset', kind, roomId: room.id } : { type: 'buyAsset', kind });
+    }
+    if (rnd() < p.sellAsset) {
+      const asset = pick(state.assets);
+      if (asset) consider({ type: 'sellAsset', assetId: asset.id });
+    }
+    if (rnd() < p.adBudget) consider({ type: 'setAdBudget', amount: Math.floor(rnd() * (adSteps + 1)) * CONFIG.marketing.adStep });
+    if (rnd() < p.fire) {
+      const victim = pick(state.people.filter((x) => !x.founder));
+      if (victim) consider({ type: 'fire', personId: victim.id });
+    }
+    for (const person of state.people) {
+      if (person.raisePending && rnd() < p.raise) consider({ type: 'raise', personId: person.id, grant: rnd() < 0.5 });
+    }
+    if (rnd() < p.founderRole) consider({ type: 'founderRole', role: state.founderRole === 'product' ? 'sales' : 'product' });
+    if (rnd() < p.prepay) consider({ type: 'prepayLoan' });
+    if (rnd() < p.sellCompany) consider({ type: 'sell' });
+  };
+
+  const tournamentMoves = (state: GameState, consider: (a: Action) => void): void => {
+    const canSpend = runwayWith(state) > p.spendRunway;
+    if (rnd() < p.hireRole && canSpend) {
+      const role = pick(RULES.roles);
+      if (role) consider({ type: 'hireRole', role });
+    }
+    if (rnd() < p.fireRole) {
+      const role = pick(RULES.roles.filter((r) => hired(state, r) > 0));
+      if (role) consider({ type: 'fireRole', role });
+    }
+    if (rnd() < p.server) consider({ type: 'buyAsset', kind: 'server' });
+    if (rnd() < p.demoRoom) consider({ type: 'buyDemoRoom' });
+    if (rnd() < p.uncle) consider({ type: 'debug', op: 'cash' });
+  };
+
   return {
-    name: 'random',
-    engine: 'full',
+    name: engine === 'tournament' ? 'randomTournament' : 'random',
+    engine,
     act(state) {
       const out: Action[] = [];
       const consider = (a: Action): void => { if (ok(state, a)) out.push(a); };
@@ -718,51 +795,8 @@ export function randomStrategy(policySeed: number, options: RandomPolicyOptions 
         if (choice) consider({ type: 'card', choiceId: choice.id });
         return out; // nothing else dispatches while a card is open
       }
-      const canSpend = runwayWith(state) > p.spendRunway;
-      if (rnd() < p.hire && canSpend) {
-        const role = pick(ROLES);
-        const cand = role ? pick(state.candidates[role]) : undefined;
-        if (cand) {
-          const hire: Action = { type: 'hire', candidateId: cand.id };
-          if (ok(state, hire)) out.push(hire);
-          else {
-            // no seat for them: a desk in a random room that takes the role is the valid move toward that hire
-            const room = pick(state.rooms.filter((r) => S.roomAcceptsRole(r, cand.role)));
-            if (room) consider({ type: 'buyAsset', kind: 'desk', roomId: room.id });
-          }
-        }
-      }
-      if (rnd() < p.room && canSpend) {
-        const kind = pick(roomKinds) ?? 'product';
-        const size = pick(sizes) ?? 'small';
-        const floor: 0 | 1 = state.floors === 2 && rnd() < 0.5 ? 1 : 0;
-        const spot = pick(validSpots(state, kind, size, floor));
-        if (spot) consider({ type: 'placeRoom', kind, size, floor, x: spot.x, y: spot.y });
-      }
-      if (rnd() < p.closeRoom) {
-        const room = pick(state.rooms);
-        if (room) consider({ type: 'closeRoom', roomId: room.id });
-      }
-      if (rnd() < p.buy) {
-        const kind = pick(ASSET_KINDS) ?? 'laptop';
-        const room = kind === 'desk' ? pick(state.rooms) : undefined;
-        consider(room ? { type: 'buyAsset', kind, roomId: room.id } : { type: 'buyAsset', kind });
-      }
-      if (rnd() < p.sellAsset) {
-        const asset = pick(state.assets);
-        if (asset) consider({ type: 'sellAsset', assetId: asset.id });
-      }
-      if (rnd() < p.adBudget) consider({ type: 'setAdBudget', amount: Math.floor(rnd() * (adSteps + 1)) * CONFIG.marketing.adStep });
-      if (rnd() < p.fire) {
-        const victim = pick(state.people.filter((x) => !x.founder));
-        if (victim) consider({ type: 'fire', personId: victim.id });
-      }
-      for (const person of state.people) {
-        if (person.raisePending && rnd() < p.raise) consider({ type: 'raise', personId: person.id, grant: rnd() < 0.5 });
-      }
-      if (rnd() < p.founderRole) consider({ type: 'founderRole', role: state.founderRole === 'product' ? 'sales' : 'product' });
-      if (rnd() < p.prepay) consider({ type: 'prepayLoan' });
-      if (rnd() < p.sellCompany) consider({ type: 'sell' });
+      if (engine === 'tournament') tournamentMoves(state, consider);
+      else fullMoves(state, consider, out);
       return out;
     },
   };
@@ -797,6 +831,18 @@ export interface RunOptions {
   onDay?: (state: GameState) => void;
   /** Iterations in a row without the clock moving before the run is declared stalled (a card nobody answers). */
   stallLimit?: number;
+  /**
+   * Count the coach's advice (DESIGN.md 18): every day (and every card) on which advise() names an
+   * action the sim would accept, and whether the strategy dispatched exactly that action. Off by
+   * default; the balance harness turns it on for its "coach advice taken" column.
+   */
+  coach?: boolean;
+}
+
+/** How often the strategy did what the coach said (RunOptions.coach): days with a dispatchable advice, and those on which it was taken. */
+export interface CoachStats {
+  dispatchable: number;
+  taken: number;
 }
 
 /** Pacing milestones of one run (DESIGN.md 16): the day each first happened, and the cards seen. */
@@ -822,6 +868,8 @@ export interface RunResult {
   state: GameState;
   trace: MonthTrace[];
   pacing: Pacing;
+  /** zeros unless RunOptions.coach was on */
+  coach: CoachStats;
 }
 
 function traceOf(state: GameState, book: MonthBook): MonthTrace {
@@ -892,6 +940,7 @@ function play(seed: number, strategy: Strategy, months: number, opts: RunOptions
   const state = createGame(seed);
   const trace: MonthTrace[] = [];
   const pacing = newPacing();
+  const coach: CoachStats = { dispatchable: 0, taken: 0 };
   const seenCards = new Set<string>();
   const targetDay = months * D;
   const stallLimit = opts.stallLimit ?? 8;
@@ -901,10 +950,17 @@ function play(seed: number, strategy: Strategy, months: number, opts: RunOptions
     observePacing(state, pacing, seenCards);
     const dayBefore = state.day;
     const closedBefore = state.history.length;
+    // the coach's advice on the state the strategy sees, before it acts (advise is a pure read)
+    const advised = opts.coach ? dispatchableAdvice(state) : null;
+    if (advised !== null) coach.dispatchable += 1;
+    let taken = false;
     for (const action of strategy.act(state)) {
       if (state.status !== 'playing') break;
-      if (canDispatch(state, action).ok) dispatch(state, action);
+      if (!canDispatch(state, action).ok) continue;
+      if (advised !== null && canon(action) === advised) taken = true;
+      dispatch(state, action);
     }
+    if (taken) coach.taken += 1;
     advanceDay(state);
     for (let i = closedBefore; i < state.history.length; i++) {
       const book = state.history[i];
@@ -924,5 +980,17 @@ function play(seed: number, strategy: Strategy, months: number, opts: RunOptions
     }
   }
   observePacing(state, pacing, seenCards);
-  return { state, trace, pacing };
+  return { state, trace, pacing, coach };
+}
+
+/** An action as JSON with its keys sorted, so two actions compare equal whatever order their fields were written in. */
+function canon(action: Action): string {
+  const entries = Object.entries(action).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify(Object.fromEntries(entries));
+}
+
+/** The coach's action for this state (canon) when it names one the sim would accept right now, else null. */
+function dispatchableAdvice(state: GameState): string | null {
+  const action = advise(state).action;
+  return action && canDispatch(state, action).ok ? canon(action) : null;
 }

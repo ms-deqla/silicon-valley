@@ -227,11 +227,10 @@ export function enterpriseCloseProb(state: GameState): number {
 
 export function visitorsPerMonth(state: GameState): number {
   const m = CONFIG.marketing;
-  let v = m.baseVisitorsPerMonth;
-  if (hasRoom(state, 'marketing')) {
-    v += m.visitorsPerOutput * roleOutput(state, 'marketing');
-    v += m.adVisitorsPerSqrtK * Math.sqrt(state.adBudget / 1000);
-  }
+  // DESIGN.md 8: every marketer's output counts wherever they sit (the garage's spare desk
+  // included, DESIGN.md 0); only the ad budget needs the Marketing room
+  let v = m.baseVisitorsPerMonth + m.visitorsPerOutput * roleOutput(state, 'marketing');
+  if (hasRoom(state, 'marketing')) v += m.adVisitorsPerSqrtK * Math.sqrt(state.adBudget / 1000);
   if (pressActive(state)) v *= state.effects.pressMult;
   if (recessionActive(state)) v *= CONFIG.events.recessionVisitors;
   return v;

@@ -8,9 +8,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG, RULES } from '../src/sim';
 import type { Card, GameState } from '../src/sim';
+import type { Audio } from '../src/ui/audio';
 import { createController } from '../src/ui/controller';
+import type { ShellController } from '../src/ui/controller';
 import type { Leaderboard, LeaderUpdate } from '../src/ui/leaderboard';
 import { useTournamentRules } from './setup';
+
+/** A silent audio: nothing here listens to the cues (test/unit-controller-v2.test.ts does). */
+const silent: Audio = { available: false, enabled: false, setEnabled() {}, start() {}, play() {}, destroy() {} };
+
+/** A controller with the clock started at once (the v2 tour is not part of these tests). */
+function running(seed: number, posts: LeaderUpdate[] = []): ShellController {
+  const c = createController(seed, stubLeaderboard(posts), { audio: silent });
+  c.startClock();
+  return c;
+}
 
 const D = CONFIG.time.daysPerMonth;
 const MONTH_MS = RULES.secondsPerMonth * 1000;
@@ -61,7 +73,7 @@ describe('the round clock projects the day the buzzer rings (DESIGN.md 0)', () =
   });
 
   it('is the nominal round until a card costs months, and the sim sees it before the first day is played', () => {
-    const c = createController(3, stubLeaderboard());
+    const c = running(3);
     quiet(c.state);
     expect(c.state.schedule.roundEndDay).toBeNull();
     expect(c.tick(0)).toBe(false);
@@ -74,7 +86,7 @@ describe('the round clock projects the day the buzzer rings (DESIGN.md 0)', () =
 
   it('a card left open for two months pulls the end two months closer, and the buzzer rings on the projected day', () => {
     const posts: LeaderUpdate[] = [];
-    const c = createController(3, stubLeaderboard(posts));
+    const c = running(3, posts);
     c.tick(0);
     expect(c.dispatch({ type: 'debug', op: 'knock' }).ok).toBe(true);
     expect(c.state.card?.kind).toBe('knock');
@@ -109,7 +121,7 @@ describe('the round clock projects the day the buzzer rings (DESIGN.md 0)', () =
   });
 
   it('a scheduled knock due inside the last 30 days before the buzzer never opens, though the nominal calendar has months left', () => {
-    const c = createController(3, stubLeaderboard());
+    const c = running(3);
     quiet(c.state);
     c.tick(0);
     // three months go to an open card: the buzzer will ring on day 810, not 900
@@ -133,7 +145,7 @@ describe('the round clock projects the day the buzzer rings (DESIGN.md 0)', () =
     expect(c.state.schedule.knocks).toBe(1);
 
     // the same due day on a round that lost no months is 100 days before the buzzer: the knock opens
-    const full = createController(3, stubLeaderboard());
+    const full = running(3);
     quiet(full.state);
     full.tick(0);
     full.state.schedule.nextKnockDay = end - 10;

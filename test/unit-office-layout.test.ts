@@ -13,14 +13,20 @@ import {
   BACK_WALL, GAP_ROWS, STREET_ROWS, cellRect, computeLayout, doorAnchor, floorRect, footprint, hitCell, layout,
   roomAt, roomRect, stairPoints,
 } from '../src/ui/office/layout';
-import { buildScene } from '../src/ui/office/scene';
+import { buildPlots, buildScene, lookKey, lookOf } from '../src/ui/office/scene';
 import { formatMoney, hash01 } from '../src/ui/office/util';
 import {
-  WALK_CELLS_PER_SEC, activeWalkers, coinAt, countKind, createCrowd, representedWalkers, rescaleCrowd,
-  spawnWalker, stepCrowd, wp,
+  WALK_CELLS_PER_SEC, WALK_CYCLE_CELLS, activeWalkers, coinAt, countKind, createCrowd, representedWalkers, rescaleCrowd,
+  spawnWalker, stepCrowd, walkFrame, wp,
 } from '../src/ui/office/walkers';
 import { MAX_WAITING, applyVisual } from '../src/ui/office/choreo';
 import type { ChoreoContext } from '../src/ui/office/choreo';
+import { CARRY_BAG, CARRY_BOX, CARRY_CASE, CARRY_LAPTOP, CARRY_NONE, HAIR_STYLES, OUTFITS, WALK_FRAMES } from '../src/ui/office/primitives';
+import { HAIR, SKIN, TROUSERS, shades } from '../src/ui/office/palette';
+import { createSpriteCache, getSprite, resetSpriteCache } from '../src/ui/office/sprites';
+import { BUS_CROSS, BUS_PERIOD, busDir, busProgress, busX } from '../src/ui/office/street';
+import { RULES } from '../src/sim/config';
+import { validSpots } from '../src/sim/rooms';
 
 const near = (a: number, b: number, eps = 1e-6): void => expect(Math.abs(a - b)).toBeLessThanOrEqual(eps);
 
@@ -416,6 +422,235 @@ describe('choreography', () => {
   });
 });
 
+describe('looks (DESIGN 3, 17: outfits, hair, skin from the palettes)', () => {
+  it('hashes a stable look per person from the palettes', () => {
+    const a = lookOf('p7', 'sales');
+    const b = lookOf('p7', 'sales');
+    expect(a).toEqual(b);
+    expect(SKIN).toContain(a.skin);
+    expect(HAIR).toContain(a.hair);
+    expect(TROUSERS).toContain(a.trousers);
+    expect(a.outfit).toBeGreaterThanOrEqual(0);
+    expect(a.outfit).toBeLessThan(OUTFITS);
+    expect(a.style).toBeGreaterThanOrEqual(0);
+    expect(a.style).toBeLessThan(HAIR_STYLES);
+    expect(a.carry).toBe(CARRY_NONE);
+    expect(lookKey(a)).toBe(lookKey(b));
+    expect(lookKey(lookOf('p8', 'sales'))).not.toBe(lookKey(lookOf('p8', 'product')));
+  });
+
+  it('spreads a crowd over every outfit and hairstyle', () => {
+    const outfits = new Set<number>();
+    const styles = new Set<number>();
+    for (let i = 0; i < 200; i++) {
+      const l = lookOf('p' + i, 'product');
+      outfits.add(l.outfit);
+      styles.add(l.style);
+    }
+    expect(outfits.size).toBe(OUTFITS);
+    expect(styles.size).toBe(HAIR_STYLES);
+  });
+
+  it('seats carry their look and sprite key', () => {
+    const s = createGame(7);
+    const sc = buildScene(s, computeLayout({ width: 420, height: 560, floors: 1 }));
+    const seat = sc.first.garage!.seats[0];
+    expect(seat.look).toEqual(lookOf(seat.personId, 'product'));
+    expect(seat.key).toBe(lookKey(seat.look));
+    expect(seat.look.skin).toBe(SKIN[seat.skin]);
+    expect(seat.look.hair).toBe(HAIR[seat.hair]);
+  });
+
+  it('caches outfit shades per colour', () => {
+    const a = shades('#5B8DEF');
+    expect(shades('#5B8DEF')).toBe(a);
+    expect(a.light).not.toBe(a.dark);
+    expect(a.light).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});
+
+describe('walk cycle and carried items', () => {
+  it('steps through the four frames with the distance walked and stands on −1', () => {
+    const crowd = createCrowd(2, 40);
+    const w = spawnWalker(crowd, 'smb', [wp(0, 0), wp(1000, 0)], { body: '#000' })!;
+    expect(walkFrame(w, 40)).toBe(-1);
+    const seen: number[] = [];
+    const perFrame = (WALK_CYCLE_CELLS * 40) / WALK_FRAMES;
+    for (let i = 0; i < 40; i++) {
+      stepCrowd(crowd, perFrame / w.speed);
+      seen.push(walkFrame(w, 40));
+    }
+    expect(seen.slice(0, 8)).toEqual([1, 2, 3, 0, 1, 2, 3, 0]);
+    for (const f of seen) expect(f >= 0 && f < WALK_FRAMES).toBe(true);
+    expect(walkFrame(w, 0)).toBe(-1);
+  });
+
+  it('gives visitors a bag or a laptop, prospects a briefcase, hires a laptop and leavers a box', () => {
+    const s = createGame(11);
+    const l = computeLayout({ width: 420, height: 560, floors: 1 });
+    const scene = buildScene(s, l);
+    const crowd = createCrowd(CONFIG.ui.maxWalkers, l.cell);
+    const cx: ChoreoContext = {
+      smbPrice: 300,
+      seatOf: (id) => scene.seats.get(id) ?? null,
+      lastSeatOf: (id) => scene.seats.get(id) ?? null,
+      lastRoomCentre: () => null,
+      assetPoint: () => null,
+    };
+    const carries = new Set<number>();
+    for (let i = 0; i < 12; i++) {
+      applyVisual(crowd, scene, { t: 'visitor', day: i, outcome: 'smb' }, cx);
+      const w = crowd.walkers.find((x) => x.active && x.kind === 'smb')!;
+      carries.add(w.look.carry);
+      w.active = false;
+    }
+    expect([...carries].sort()).toEqual([CARRY_BAG, CARRY_LAPTOP]);
+    applyVisual(crowd, scene, { t: 'visitor', day: 1, outcome: 'waiting' }, cx);
+    const waiting = crowd.walkers.find((x) => x.active && x.kind === 'waiting')!;
+    expect(waiting.look.carry).toBe(CARRY_CASE);
+    applyVisual(crowd, scene, { t: 'visitor', day: 2, outcome: 'enterprise' }, cx);
+    expect(waiting.kind).toBe('enterprise');
+    expect(waiting.look.carry).toBe(CARRY_CASE);
+    waiting.active = false;
+    const founder = s.people[0];
+    applyVisual(crowd, scene, { t: 'hire', day: 2, personId: founder.id }, cx);
+    const hire = crowd.walkers.find((x) => x.active && x.kind === 'hire')!;
+    const seat = scene.seats.get(founder.id)!;
+    expect(hire.look.carry).toBe(CARRY_LAPTOP);
+    expect(hire.look.outfit).toBe(seat.look.outfit);
+    expect(hire.look.style).toBe(seat.look.style);
+    expect(hire.look.trousers).toBe(seat.look.trousers);
+    expect(hire.look.skin).toBe(seat.look.skin);
+    applyVisual(crowd, scene, { t: 'leave', day: 3, personId: founder.id, name: 'You', reason: 'fired' }, cx);
+    const leaver = crowd.walkers.find((x) => x.active && x.kind === 'leave')!;
+    expect(leaver.look.carry).toBe(CARRY_BOX);
+    expect(leaver.look.hair).toBe(seat.look.hair);
+  });
+
+  it('keeps the look indices in range for every spawn', () => {
+    const crowd = createCrowd(4, 40);
+    for (let i = 0; i < 50; i++) {
+      const w = spawnWalker(crowd, 'smb', [wp(0, 0), wp(10, 0)], { body: '#123456', trousers: i % 2 === 0 ? -1 : 99 })!;
+      expect(w.look.body).toBe('#123456');
+      expect(TROUSERS).toContain(w.look.trousers);
+      expect(w.look.outfit).toBeLessThan(OUTFITS);
+      expect(w.look.style).toBeLessThan(HAIR_STYLES);
+      w.active = false;
+    }
+  });
+});
+
+describe('build plots (DESIGN 17: dashed "Build here" plots on free slots)', () => {
+  const lotRooms = (s: GameState): void => {
+    const lb = CONFIG.grid.lobby;
+    s.rooms.push({ id: 'lobby', kind: 'lobby', size: 'small', floor: 0, x: lb.x, y: lb.y, w: lb.w, h: lb.h, rent: 0, openedDay: 0 });
+  };
+
+  it('tiles the free area with non-overlapping plots a RULES.roomSize room fits, lowest row first', () => {
+    const s = createGame(3);
+    const l = computeLayout({ width: 420, height: 560, floors: 1 });
+    const plots = buildPlots(s, l);
+    const fp = footprint('product', RULES.roomSize);
+    expect(plots.length).toBeGreaterThan(0);
+    const spots = validSpots(s, 'product', RULES.roomSize, 0);
+    for (const p of plots) {
+      expect(p.floor).toBe(0);
+      expect(p.w).toBe(fp.w);
+      expect(p.h).toBe(fp.h);
+      expect(spots.some((sp) => sp.x === p.x && sp.y === p.y)).toBe(true);
+      near(p.rect.x, l.x0 + p.x * l.cell);
+      near(p.rect.y, l.floorTop[0] + p.y * l.cell);
+    }
+    for (let i = 0; i < plots.length; i++) {
+      for (let j = i + 1; j < plots.length; j++) {
+        const a = plots[i];
+        const b = plots[j];
+        const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+        expect(apart).toBe(true);
+      }
+    }
+    // the next room's plot is the sim's autoSpot: the lowest row, then leftmost
+    const next = plots.filter((p) => p.next);
+    expect(next.length).toBe(1);
+    const sorted = spots.slice().sort((a, b) => b.y - a.y || a.x - b.x);
+    expect(next[0].x).toBe(sorted[0].x);
+    expect(next[0].y).toBe(sorted[0].y);
+    // the garage, the lobby cells and every plot never overlap
+    const g = CONFIG.grid.garage;
+    const lb = CONFIG.grid.lobby;
+    for (const p of plots) {
+      const hits = (r: { x: number; y: number; w: number; h: number }): boolean => p.x < r.x + r.w && r.x < p.x + p.w && p.y < r.y + r.h && r.y < p.y + p.h;
+      expect(hits(g)).toBe(false);
+      expect(hits(lb)).toBe(false);
+    }
+  });
+
+  it('loses the plots a new room covers and adds a floor of plots with the second floor', () => {
+    const s = createGame(3);
+    lotRooms(s);
+    const l1 = computeLayout({ width: 420, height: 560, floors: 1 });
+    const before = buildPlots(s, l1);
+    const first = before[0];
+    s.rooms.push({ id: 'r1', kind: 'product', size: RULES.roomSize, floor: 0, x: first.x, y: first.y, w: first.w, h: first.h, rent: 4500, openedDay: 0 });
+    const after = buildPlots(s, l1);
+    expect(after.length).toBe(before.length - 1);
+    expect(after.some((p) => p.x === first.x && p.y === first.y)).toBe(false);
+    expect(after[0].next).toBe(true);
+    // a floor the state does not have yet shows no plots, even when the layout has room for it
+    expect(buildPlots(s, computeLayout({ width: 420, height: 560, floors: 2 })).every((p) => p.floor === 0)).toBe(true);
+    s.floors = 2;
+    const two = buildPlots(s, computeLayout({ width: 420, height: 560, floors: 2 }));
+    expect(two.some((p) => p.floor === 1)).toBe(true);
+    expect(two.filter((p) => p.next).length).toBe(1);
+    expect(two[0].floor).toBe(0);
+    const sc = buildScene(s, computeLayout({ width: 420, height: 560, floors: 2 }));
+    expect(sc.plots).toEqual(two);
+    expect(sc.companyName).toBe(s.companyName);
+  });
+
+  it('shows no plots when nothing fits', () => {
+    const s = createGame(3);
+    const l = computeLayout({ width: 420, height: 560, floors: 1 });
+    for (const sp of validSpots(s, 'product', RULES.roomSize, 0)) {
+      const fp = footprint('product', RULES.roomSize);
+      if (buildPlots(s, l).some((p) => p.x === sp.x && p.y === sp.y)) {
+        s.rooms.push({ id: 'r' + sp.x + sp.y, kind: 'product', size: RULES.roomSize, floor: 0, x: sp.x, y: sp.y, w: fp.w, h: fp.h, rent: 4500, openedDay: 0 });
+      }
+    }
+    expect(buildPlots(s, l)).toEqual([]);
+  });
+});
+
+describe('street life and sprites', () => {
+  it('runs a bus across the road every BUS_PERIOD seconds, alternating direction', () => {
+    expect(busProgress(0)).toBe(0);
+    expect(busProgress(BUS_CROSS / 2)).toBeCloseTo(0.5);
+    expect(busProgress(BUS_CROSS + 1)).toBe(-1);
+    expect(busProgress(BUS_PERIOD - 0.1)).toBe(-1);
+    expect(busProgress(BUS_PERIOD + 1)).toBeCloseTo(1 / BUS_CROSS);
+    expect(busProgress(-5)).toBe(-1);
+    expect(busProgress(NaN)).toBe(-1);
+    expect(busDir(1)).toBe(1);
+    expect(busDir(BUS_PERIOD + 1)).toBe(-1);
+    expect(busDir(2 * BUS_PERIOD + 1)).toBe(1);
+    near(busX(0, 1, 420, 50), -50);
+    near(busX(1, 1, 420, 50), 470);
+    near(busX(0, -1, 420, 50), 470);
+    near(busX(0.5, -1, 420, 50), 210);
+  });
+
+  it('has no sprites without a DOM and never throws', () => {
+    const cache = createSpriteCache();
+    expect(cache.enabled).toBe(false);
+    resetSpriteCache(cache, 40, 2);
+    expect(cache.cell).toBe(40);
+    let painted = 0;
+    const s = getSprite(cache, 'k', 10, 10, 5, 5, () => { painted++; }, null);
+    expect(s).toBeNull();
+    expect(painted).toBe(0);
+  });
+});
+
 // ---------------------------------------------------------------- the whole renderer on a fake canvas
 
 interface Call {
@@ -544,7 +779,8 @@ describe('renderer on a fake canvas', () => {
       { t: 'hire', day: 1, personId: state.people[0].id },
     );
     for (let i = 0; i < 90; i++) r.frame(16);
-    expect(calls.some((k) => k.name === 'strokeText' && String(k.args[0]).startsWith('+$'))).toBe(true);
+    // coin popups are green pills with white text (DESIGN 17), so the amount is filled, not stroked
+    expect(calls.some((k) => k.name === 'fillText' && String(k.args[0]).startsWith('+$'))).toBe(true);
     // the "Owed to you" sign needs a lobby and open receivables
     const lb = CONFIG.grid.lobby;
     state.rooms.push({ id: 'lobby', kind: 'lobby', size: 'small', floor: 0, x: lb.x, y: lb.y, w: lb.w, h: lb.h, rent: 0, openedDay: 0 });
@@ -552,7 +788,9 @@ describe('renderer on a fake canvas', () => {
     calls.length = 0;
     r.frame(16);
     expect(calls.some((k) => k.name === 'fillText' && k.args[0] === 'Owed to you $184k')).toBe(true);
-    expect(calls.some((k) => k.name === 'fillText' && k.args[0] === 'Lobby')).toBe(true);
+    // the lobby carries the company's plaque instead of a room label (DESIGN 17)
+    expect(calls.some((k) => k.name === 'fillText' && k.args[0] === state.companyName)).toBe(true);
+    expect(calls.some((k) => k.name === 'fillText' && k.args[0] === 'Lobby')).toBe(false);
     // buying the second floor changes the layout under a live crowd
     state.floors = 2;
     state.visuals.push({ t: 'asset', day: 2, kind: 'secondFloor', op: 'buy' }, { t: 'close', day: 30, month: 0 }, { t: 'outage', day: 30 });

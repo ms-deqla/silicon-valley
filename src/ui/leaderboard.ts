@@ -32,10 +32,35 @@ import { RULES } from '../sim';
 
 export type LeaderStatus = 'playing' | 'sold' | 'dead';
 
+/**
+ * DESIGN.md 20: the eight named pastel colours a player picks from on the start screen,
+ * stored as `color` in the player's document and used in the strip and the tables.
+ */
+export const COLORS = ['rose', 'peach', 'lemon', 'mint', 'sky', 'lilac', 'sand', 'slate'] as const;
+export type Color = (typeof COLORS)[number];
+export const COLOR_HEX: Record<Color, string> = {
+  rose: '#f7b9c8',
+  peach: '#f9cba8',
+  lemon: '#f5e59b',
+  mint: '#b7e8c7',
+  sky: '#b9d8f7',
+  lilac: '#d5c4f5',
+  sand: '#e9d8b8',
+  slate: '#c7d0da',
+};
+/** a document without a colour (written before colours existed, or a value the list does not know) reads as this */
+export const DEFAULT_COLOR: Color = 'sky';
+
+export function isColor(x: unknown): x is Color {
+  return typeof x === 'string' && (COLORS as readonly string[]).includes(x);
+}
+
 export interface LeaderEntry {
   /** the player's viewer id, or 'local' in the fallback */
   id: string;
   name: string;
+  /** DESIGN.md 20: the colour the player chose, one of the eight names */
+  color: Color;
   seed: number;
   value: number;
   /** the final score once finished; while playing, what the buzzer would pay now (value × founder share), posted for the record */
@@ -76,9 +101,10 @@ export interface Leaderboard {
   /**
    * registers this player's run: status 'playing', value/score 0, month 0, `best` carried from this player's
    * earlier runs on the seed (this page load's, else the stored document's, read before the first write,
-   * else the copy kept in this browser); resolves once the run is registered, the shared write proceeds in the background
+   * else the copy kept in this browser); resolves once the run is registered, the shared write proceeds in the background.
+   * `color` (DESIGN.md 20) is the colour the player chose; DEFAULT_COLOR when omitted.
    */
-  start(name: string, seed: number): Promise<void>;
+  start(name: string, seed: number, color?: Color): Promise<void>;
   /** coalesced: at most one write in flight per document, the latest update wins, only when something changed; a finished score raises `best` */
   post(update: LeaderUpdate): void;
   /**
@@ -112,6 +138,7 @@ const STATUSES: readonly LeaderStatus[] = ['playing', 'sold', 'dead'];
 /** A document as the store holds it: plain JSON, numbers as numbers. */
 type ScoreDoc = {
   name: string;
+  color: Color;
   seed: number;
   value: number;
   score: number;
@@ -142,6 +169,7 @@ function parseDoc(raw: unknown): ScoreDoc | null {
   const score = num(r.score);
   return {
     name: cleanName(r.name),
+    color: isColor(r.color) ? r.color : DEFAULT_COLOR,
     seed: r.seed,
     value: num(r.value),
     score,
@@ -614,13 +642,24 @@ export function createLeaderboard(): Leaderboard {
     });
   }
 
-  async function start(name: string, s: number): Promise<void> {
+  async function start(name: string, s: number, color: Color = DEFAULT_COLOR): Promise<void> {
     if (destroyed) return;
     const gen = ++generation;
     // best of the day (DESIGN.md 0): a new run on the same seed carries the best finished score so far
     const previous = me && me.seed === s ? me : null;
     seed = s;
-    me = { name: cleanName(name), seed: s, value: 0, score: 0, best: previous ? previous.best : 0, month: 0, status: 'playing', updatedAt: Date.now() };
+    me = {
+      name: cleanName(name),
+      // DESIGN.md 20: the chosen colour travels with the score
+      color: isColor(color) ? color : DEFAULT_COLOR,
+      seed: s,
+      value: 0,
+      score: 0,
+      best: previous ? previous.best : 0,
+      month: 0,
+      status: 'playing',
+      updatedAt: Date.now(),
+    };
     lastSent = null;
     emit();
     await ready;

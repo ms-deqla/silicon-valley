@@ -1,6 +1,8 @@
 /**
  * The building: grid placement, opening and closing rooms, the lobby, the demo room.
- * DESIGN.md section 5.
+ * DESIGN.md section 5, and section 0 "Space (v2)" for the office that builds itself
+ * around the tournament's hires (large rooms, the second floor built by the hire that
+ * finds the ground floor full).
  */
 import { CONFIG, RULES } from './config';
 import * as assets from './assets';
@@ -9,7 +11,7 @@ import * as S from './selectors';
 import { fire, founderOf, seatPerson } from './staff';
 import { fmtMoney, roomName } from './names';
 import { no, OK } from './types';
-import type { Asset, GameState, Role, Room, RoomSize, Verdict } from './types';
+import type { GameState, Role, Room, RoomSize, Verdict } from './types';
 
 export function roomFootprint(kind: Role | 'demo', size: RoomSize): { w: number; h: number } {
   if (kind === 'demo') return { w: CONFIG.rooms.demo.w, h: CONFIG.rooms.demo.h };
@@ -25,6 +27,19 @@ function overlaps(ax: number, ay: number, aw: number, ah: number, bx: number, by
   return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
 }
 
+/** Geometry only: in bounds, clear of the lobby's cells on floor 0, no overlap with the rooms on that floor. */
+function fitsOn(state: GameState, kind: Role | 'demo', size: RoomSize, floor: 0 | 1, x: number, y: number): Verdict {
+  const { w, h } = roomFootprint(kind, size);
+  const g = CONFIG.grid;
+  if (x < 0 || y < 0 || x + w > g.w || y + h > g.h) return no('Out of bounds.');
+  // DESIGN.md 5: the lobby cells on floor 0 stay free even before the lobby appears
+  if (floor === 0 && overlaps(x, y, w, h, g.lobby.x, g.lobby.y, g.lobby.w, g.lobby.h)) return no('That spot is reserved for the lobby.');
+  for (const r of state.rooms) {
+    if (r.floor === floor && overlaps(x, y, w, h, r.x, r.y, r.w, r.h)) return no(`Overlaps the ${roomName(r.kind)}.`);
+  }
+  return OK;
+}
+
 /** In bounds, no overlap with rooms/garage/lobby on that floor, floor exists, cash for the demo room, one demo room max, Finance unlocked. */
 export function canPlaceRoom(state: GameState, kind: Role | 'demo', size: RoomSize, floor: 0 | 1, x: number, y: number): Verdict {
   if ((kind === 'finance' && !RULES.finance) || (kind === 'rnd' && !RULES.rnd)) return no('Not in this game.');
@@ -37,27 +52,24 @@ export function canPlaceRoom(state: GameState, kind: Role | 'demo', size: RoomSi
   }
   if (floor >= state.floors) return no('Buy the second floor first.');
   if (!Number.isInteger(x) || !Number.isInteger(y)) return no('Pick a grid cell.');
-  const { w, h } = roomFootprint(kind, size);
-  const g = CONFIG.grid;
-  if (x < 0 || y < 0 || x + w > g.w || y + h > g.h) return no('Out of bounds.');
-  // DESIGN.md 5: the lobby cells on floor 0 stay free even before the lobby appears
-  if (floor === 0 && overlaps(x, y, w, h, g.lobby.x, g.lobby.y, g.lobby.w, g.lobby.h)) return no('That spot is reserved for the lobby.');
-  for (const r of state.rooms) {
-    if (r.floor === floor && overlaps(x, y, w, h, r.x, r.y, r.w, r.h)) return no(`Overlaps the ${roomName(r.kind)}.`);
-  }
-  return OK;
+  return fitsOn(state, kind, size, floor, x, y);
 }
 
-/** All top-left cells where this room would fit on the floor (for the UI to highlight). */
-export function validSpots(state: GameState, kind: Role | 'demo', size: RoomSize, floor: 0 | 1): { x: number; y: number }[] {
+/** Every top-left cell of the floor where the footprint passes the given check. */
+function scanSpots(kind: Role | 'demo', size: RoomSize, fits: (x: number, y: number) => boolean): { x: number; y: number }[] {
   const { w, h } = roomFootprint(kind, size);
   const out: { x: number; y: number }[] = [];
   for (let y = 0; y + h <= CONFIG.grid.h; y++) {
     for (let x = 0; x + w <= CONFIG.grid.w; x++) {
-      if (canPlaceRoom(state, kind, size, floor, x, y).ok) out.push({ x, y });
+      if (fits(x, y)) out.push({ x, y });
     }
   }
   return out;
+}
+
+/** All top-left cells where this room would fit on the floor (for the UI to highlight). */
+export function validSpots(state: GameState, kind: Role | 'demo', size: RoomSize, floor: 0 | 1): { x: number; y: number }[] {
+  return scanSpots(kind, size, (x, y) => canPlaceRoom(state, kind, size, floor, x, y).ok);
 }
 
 function floorWord(floor: 0 | 1): string {
@@ -120,13 +132,6 @@ export function canCloseRoom(state: GameState, roomId: string): Verdict {
   return OK;
 }
 
-function disposeAsset(state: GameState, a: Asset): number {
-  const proceeds = L.recordDisposal(state, a);
-  const i = state.assets.indexOf(a);
-  if (i >= 0) state.assets.splice(i, 1);
-  return proceeds;
-}
-
 /**
  * Fires occupants with severance ('roomClosed'), sells desks in it at 60% of book (ledger.recordDisposal),
  * removes the room. Closing the demo room disposes the demoRoom asset. Garage and lobby cannot close.
@@ -145,10 +150,9 @@ export function closeRoom(state: GameState, roomId: string): void {
     fire(state, p.id, 'roomClosed');
     letGo += 1;
   }
-  let proceeds = 0;
-  for (const desk of S.desksIn(state, room.id)) proceeds += disposeAsset(state, desk);
+  let proceeds = assets.disposeDesksIn(state, room.id);
   if (room.kind === 'demo') {
-    for (const a of state.assets.filter((x) => x.kind === 'demoRoom' && x.roomId === room.id)) proceeds += disposeAsset(state, a);
+    for (const a of state.assets.filter((x) => x.kind === 'demoRoom' && x.roomId === room.id)) proceeds += assets.dispose(state, a);
   }
 
   state.rooms.splice(state.rooms.indexOf(room), 1);
@@ -171,22 +175,42 @@ export function closeRoom(state: GameState, roomId: string): void {
 
 // ---------------------------------------------------------------- tournament helpers (DESIGN.md 0)
 
-/** The spot a room of this kind would be auto-placed on: lowest row first, then leftmost; floor 0 before floor 1. */
-export function autoSpot(state: GameState, kind: Role | 'demo', size: RoomSize = 'small'): { floor: 0 | 1; x: number; y: number } | null {
+/** DESIGN.md 0: rooms open by themselves on the lowest free row first, leftmost on that row. */
+function lowestRowFirst(spots: { x: number; y: number }[]): { x: number; y: number } | null {
+  spots.sort((a, b) => b.y - a.y || a.x - b.x);
+  return spots[0] ?? null;
+}
+
+/**
+ * The spot a room of this kind would be auto-placed on: lowest row first, then leftmost; floor 0
+ * before floor 1, on the floors that exist. The size is the one the ruleset opens (RULES.roomSize).
+ */
+export function autoSpot(state: GameState, kind: Role | 'demo', size: RoomSize = RULES.roomSize): { floor: 0 | 1; x: number; y: number } | null {
   for (const floor of [0, 1] as const) {
     if (floor >= state.floors) break;
-    const spots = validSpots(state, kind, size, floor);
-    if (spots.length === 0) continue;
-    spots.sort((a, b) => b.y - a.y || a.x - b.x);
-    return { floor, x: spots[0].x, y: spots[0].y };
+    const first = lowestRowFirst(validSpots(state, kind, size, floor));
+    if (first) return { floor, ...first };
   }
   return null;
 }
 
 /**
- * Make sure the role has a free desk: reuse one, add a desk to a room with capacity,
- * or open a small room on the next free spot (lobby appears with the first room).
- * Pays for the desk through assets.buy (capex). Returns the room with the free seat, or null.
+ * DESIGN.md 0 "Space (v2)": would the next room of this kind go on a second floor that is not built
+ * yet? True when the rule is on, only the ground floor exists, nothing of this size fits on it any
+ * more, and the room would fit on the empty floor above.
+ */
+export function wouldBuildUpstairs(state: GameState, kind: Role | 'demo', size: RoomSize = RULES.roomSize): boolean {
+  if (!RULES.upstairs || state.floors !== 1) return false;
+  if (autoSpot(state, kind, size)) return false;
+  return scanSpots(kind, size, (x, y) => fitsOn(state, kind, size, 1, x, y).ok).length > 0;
+}
+
+/**
+ * Make sure the role has a free desk: reuse one, add a desk to a room with capacity, or open a room
+ * of RULES.roomSize on the next free spot (lobby appears with the first room). When the ground floor
+ * is full and RULES.upstairs is on, the second floor is bought first (assets.buy, capex) and the
+ * room goes upstairs (DESIGN.md 0 "Space (v2)"). Pays for the desk through assets.buy (capex).
+ * Returns the room with the free seat, or null.
  */
 export function ensureSeat(state: GameState, role: Role): Room | null {
   const seat = S.seatFor(state, role);
@@ -197,10 +221,16 @@ export function ensureSeat(state: GameState, role: Role): Room | null {
     assets.buy(state, 'desk', withSpace.id);
     return withSpace;
   }
-  const spot = autoSpot(state, role);
+  const size = RULES.roomSize;
+  let spot = autoSpot(state, role, size);
+  if (!spot && wouldBuildUpstairs(state, role, size)) {
+    if (!assets.canBuy(state, 'secondFloor').ok) return null;
+    assets.buy(state, 'secondFloor');
+    spot = autoSpot(state, role, size);
+  }
   if (!spot) return null;
-  if (!canPlaceRoom(state, role, 'small', spot.floor, spot.x, spot.y).ok) return null;
-  const room = placeRoom(state, role, 'small', spot.floor, spot.x, spot.y);
+  if (!canPlaceRoom(state, role, size, spot.floor, spot.x, spot.y).ok) return null;
+  const room = placeRoom(state, role, size, spot.floor, spot.x, spot.y);
   if (!assets.canBuy(state, 'desk', room.id).ok) return null;
   assets.buy(state, 'desk', room.id);
   return room;

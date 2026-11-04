@@ -1,7 +1,8 @@
 /**
- * DESIGN.md section 3, the art register: department colours and the pastel tints
- * derived from them. Everything here is cosmetic and precomputed once so the
- * painter never builds colour strings per frame.
+ * DESIGN.md section 3, the art register, and the section 17 accents: department
+ * colours, the pastel tints derived from them, the figure palettes and the few
+ * colours the floor feedback uses. Everything here is cosmetic and precomputed
+ * once so the painter never builds colour strings per frame.
  */
 import { ROLE_LABEL } from '../../sim/types';
 import type { Role, RoomKind } from '../../sim/types';
@@ -45,6 +46,28 @@ export const KERB = '#C3BDB2';
 /** the cream the room floors are tinted over */
 export const CREAM = '#FBF7EE';
 
+/** DESIGN 17 accents on the floor: money in (coin pills), the invoice line, the build plots */
+export const MONEY_GREEN = '#22C55E';
+export const MONEY_GREEN_DARK = '#15803D';
+export const LINE_BLUE = '#3B82F6';
+export const BUILD_AMBER = '#F59E0B';
+/** the glass storey (DESIGN 0: the second floor): translucent walls and slab, a railing along its edge */
+export const GLASS_SLAB = 'rgba(222,238,250,0.9)';
+export const GLASS_WALL = 'rgba(196,224,246,0.6)';
+export const GLASS_EDGE = 'rgba(110,160,210,0.75)';
+export const GLASS_SHEEN = 'rgba(255,255,255,0.55)';
+export const RAIL = '#8FA6BC';
+/** windows on the back walls and the lamps */
+export const SKY = '#BFE0F7';
+export const SKY_LIGHT = '#E6F3FC';
+export const WINDOW_FRAME = '#F7F4EE';
+export const LAMP_SHADE = '#F2E6CC';
+export const LAMP_POLE = '#8E8A82';
+export const LAMP_LIGHT = 'rgba(255,214,120,0.32)';
+export const LAMP_BULB = '#FFE9A8';
+/** the brand plaque in the lobby: the four logo squares */
+export const LOGO: readonly string[] = [DEPT.product, DEPT.support, DEPT.sales, DEPT.marketing];
+
 export function hexToRgb(hex: string): [number, number, number] {
   const h = hex.replace('#', '');
   const v = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
@@ -80,8 +103,8 @@ export const ROOM_FLOOR = derive((b, k) => mix(CREAM, b, k === 'garage' ? 0.55 :
 export const ROOM_BACK = derive((b, k) => mix(b, '#FFFFFF', k === 'garage' ? 0.6 : 0.76));
 /** side walls: thin strips a touch deeper than the floor */
 export const ROOM_SIDE = derive((b, k) => mix(b, '#FFFFFF', k === 'garage' ? 0.22 : 0.4));
-/** the thin darker top edge of the back wall */
-export const ROOM_TOP = derive((b, k) => mix(b, '#2E3448', k === 'garage' ? 0.35 : 0.3));
+/** the lighter band along the top of the walls: the wall's top surface, lit from above (DESIGN 17) */
+export const ROOM_TOP = derive((b, k) => mix(b, '#FFFFFF', k === 'garage' ? 0.72 : 0.9));
 /** outline */
 export const ROOM_EDGE = derive((b) => withAlpha(mix(b, '#2E3448', 0.45), 0.5));
 /** selection / tier glow */
@@ -92,6 +115,8 @@ export const ROOM_GHOST = derive((b) => withAlpha(b, 0.45));
 /** five skin tones and six hair colours, hashed per person (DESIGN 3: big-headed pastel figures) */
 export const SKIN = ['#F7D7BE', '#EDBD98', '#D9A077', '#B07A52', '#8E5C3B'];
 export const HAIR = ['#3B2A1E', '#6B4A2B', '#C47A2E', '#2B2B33', '#D9A441', '#7A4B8C'];
+/** trousers, hashed per figure */
+export const TROUSERS = ['#3F4556', '#55607A', '#6E5F50', '#2F3A4F'];
 
 /** visitors wear neutral blues and greys; staff wear their department colour */
 export const WALKER_BODY = {
@@ -106,3 +131,20 @@ export const SMB_SHIRTS: readonly string[] = ['#7FA5D8', '#6A91C7', '#93B5E0', '
 
 /** confetti colours: the six department colours */
 export const CONFETTI: readonly string[] = [DEPT.product, DEPT.sales, DEPT.support, DEPT.marketing, DEPT.finance, DEPT.rnd];
+
+export interface Shades {
+  light: string;
+  dark: string;
+}
+
+const SHADES = new Map<string, Shades>();
+
+/** Lighter and darker versions of an outfit colour, computed once per colour (outfit details never build strings per frame). */
+export function shades(color: string): Shades {
+  let s = SHADES.get(color);
+  if (!s) {
+    s = { light: mix(color, '#FFFFFF', 0.4), dark: mix(color, '#2E3448', 0.28) };
+    SHADES.set(color, s);
+  }
+  return s;
+}

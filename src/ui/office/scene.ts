@@ -1,15 +1,19 @@
 /**
- * State → scene: room rectangles, desk slots, seated people and the anchor
- * points walkers steer by. Rebuilt only when the state or the layout changes,
- * never per frame. Pure: no DOM, no mutation of the state.
- * DESIGN.md section 5 (building) and 13 (crowd).
+ * State → scene: room rectangles, desk slots, seated people and their looks, the
+ * free plots a room would fit on, and the anchor points walkers steer by.
+ * Rebuilt only when the state or the layout changes, never per frame. Pure: no
+ * DOM, no mutation of the state.
+ * DESIGN.md section 5 (building), 13 (crowd), 17 ("Build here" plots).
  */
-import { CONFIG } from '../../sim/config';
+import { CONFIG, RULES } from '../../sim/config';
+import { validSpots } from '../../sim/rooms';
 import type { GameState, Role, Room, RoomKind } from '../../sim/types';
 import * as S from '../../sim/selectors';
-import { BACK_WALL, SIDE_WALL, doorAnchor, floorRect, rectOf, roomRect, stairPoints } from './layout';
+import { BACK_WALL, SIDE_WALL, doorAnchor, floorRect, footprint, rectOf, roomRect, stairPoints } from './layout';
 import type { Layout, Rect } from './layout';
-import { HAIR, ROOM_NAME, SKIN } from './palette';
+import { DEPT, HAIR, ROOM_NAME, SKIN, TROUSERS } from './palette';
+import { CARRY_NONE, HAIR_STYLES, OUTFITS } from './primitives';
+import type { Look } from './primitives';
 import { hash01 } from './util';
 import type { Pt } from './util';
 
@@ -24,6 +28,10 @@ export interface SeatInfo {
   skin: number;
   hair: number;
   phase: number;
+  /** how the person looks (department colour, skin, hair, outfit, hairstyle); the walker in 'hire' and 'leave' copies it */
+  look: Look;
+  /** sprite key: the look, so look-alikes share one sprite */
+  key: string;
 }
 
 export interface RoomView {
@@ -35,6 +43,8 @@ export interface RoomView {
   aisle: Pt;
   centre: Pt;
   plant: Pt;
+  /** the floor lamp beside the plant, or null in rooms without one (garage, demo) */
+  lamp: Pt | null;
   /** desk centres, one per possible desk */
   slots: Pt[];
   /** desks actually bought (drawn), ≤ slots.length */
@@ -43,6 +53,18 @@ export interface RoomView {
   label: string;
   /** label width measured by the painter on first use; -1 until then */
   labelW: number;
+}
+
+/** A free plot a RULES.roomSize room would fit on (DESIGN 17: dashed "Build here" plots). */
+export interface Plot {
+  floor: 0 | 1;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rect: Rect;
+  /** the plot the next room would be placed on (lowest floor, lowest row, leftmost: the sim's autoSpot order) */
+  next: boolean;
 }
 
 export interface LobbyProps {
@@ -89,6 +111,10 @@ export interface Scene {
   servers: number;
   serversShort: number;
   coffee: boolean;
+  /** free plots a room of RULES.roomSize fits on, per existing floor, tiled the way the sim would place them */
+  plots: Plot[];
+  /** the name on the lobby's brand plaque */
+  companyName: string;
 }
 
 export function buildScene(state: GameState, l: Layout): Scene {
@@ -115,7 +141,7 @@ export function buildScene(state: GameState, l: Layout): Scene {
     ? {
         reception: { x: hall.x + 0.25 * c, y: hall.y + 0.78 * c, w: 0.78 * c, h: 0.26 * c },
         tray: { x: hall.x + hall.w - 0.62 * c, y: hall.y + 0.74 * c, w: 0.42 * c, h: 0.2 * c },
-        sign: { x: hall.x + hall.w - 0.08 * c, y: hall.y + 0.52 * c },
+        sign: { x: hall.x + hall.w - 0.08 * c, y: hall.y + 0.56 * c },
         coffee: { x: hall.x + hall.w - 0.3 * c, y: hall.y + 1.3 * c },
       }
     : null;
@@ -166,6 +192,8 @@ export function buildScene(state: GameState, l: Layout): Scene {
     servers: S.serversOwned(state),
     serversShort: S.serversShort(state),
     coffee: S.hasCoffee(state),
+    plots: buildPlots(state, l),
+    companyName: state.companyName,
   };
 }
 
@@ -175,6 +203,23 @@ export function slotGrid(room: Room): { cols: number; rows: number; max: number 
   if (max <= 0) return { cols: 0, rows: 0, max: 0 };
   const cols = Math.max(1, Math.min(room.w, max));
   return { cols, rows: Math.ceil(max / cols), max };
+}
+
+/** The look of a person: department colour, hashed skin, hair, outfit, hairstyle and trousers (DESIGN 3, 17). */
+export function lookOf(personId: string, role: Role): Look {
+  return {
+    body: DEPT[role],
+    skin: SKIN[Math.floor(hash01(personId, 1) * SKIN.length)],
+    hair: HAIR[Math.floor(hash01(personId, 2) * HAIR.length)],
+    trousers: TROUSERS[Math.floor(hash01(personId, 6) * TROUSERS.length)],
+    outfit: Math.floor(hash01(personId, 4) * OUTFITS),
+    style: Math.floor(hash01(personId, 5) * HAIR_STYLES),
+    carry: CARRY_NONE,
+  };
+}
+
+export function lookKey(look: Look): string {
+  return `${look.body}|${look.skin}|${look.hair}|${look.trousers}|${look.outfit}|${look.style}`;
 }
 
 function buildRoomView(state: GameState, room: Room, rect: Rect, c: number): RoomView {
@@ -201,21 +246,33 @@ function buildRoomView(state: GameState, room: Room, rect: Rect, c: number): Roo
     const p = occupants[i];
     const slot = slots.length > 0 ? slots[i % slots.length] : { x: interior.x + interior.w / 2, y: interior.y + 0.42 * c };
     const overflow = slots.length > 0 ? Math.floor(i / slots.length) : i;
+    const role = S.roleOf(state, p);
+    const look = lookOf(p.id, role);
     seats.push({
       personId: p.id,
       x: slot.x - 0.06 * c + overflow * 0.14 * c,
       y: slot.y + 0.06 * c,
       floor: room.floor,
-      role: S.roleOf(state, p),
+      role,
       founder: p.founder,
       skin: Math.floor(hash01(p.id, 1) * SKIN.length),
       hair: Math.floor(hash01(p.id, 2) * HAIR.length),
       phase: hash01(p.id, 3) * Math.PI * 2,
+      look,
+      key: lookKey(look),
     });
   }
   const plant: Pt = room.kind === 'lobby'
     ? { x: rect.x + sideW + 0.16 * c, y: rect.y + backH + 0.2 * c }
     : { x: rect.x + rect.w - sideW - 0.16 * c, y: rect.y + backH + 0.18 * c };
+  // DESIGN 17: a floor lamp in every room but the garage (a bare bulb there) and the demo room (the screen lights
+  // it), standing in the front corner where no desk, prop or waiting visitor goes (the lobby's waiting spots are at
+  // the left, so its lamp stands at the right)
+  const lamp: Pt | null = room.kind === 'garage' || room.kind === 'demo'
+    ? null
+    : room.kind === 'lobby'
+      ? { x: rect.x + rect.w - sideW - 0.17 * c, y: rect.y + rect.h - 0.12 * c }
+      : { x: rect.x + sideW + 0.19 * c, y: rect.y + rect.h - 0.12 * c };
   return {
     room,
     rect,
@@ -223,10 +280,43 @@ function buildRoomView(state: GameState, room: Room, rect: Rect, c: number): Roo
     aisle: { x: rect.x + rect.w / 2, y: rect.y + rect.h - 0.16 * c },
     centre: { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 },
     plant,
+    lamp,
     slots,
     deskCount,
     seats,
     label: ROOM_NAME[room.kind],
     labelW: -1,
   };
+}
+
+function overlaps(a: { x: number; y: number }, b: { x: number; y: number }, w: number, h: number): boolean {
+  return a.x < b.x + w && b.x < a.x + w && a.y < b.y + h && b.y < a.y + h;
+}
+
+/**
+ * DESIGN 17: the free plots, from the sim's validSpots for a RULES.roomSize room,
+ * tiled greedily in the order the sim places rooms (lowest row first, then
+ * leftmost; floor 0 before floor 1) so each plot is where a room would really go.
+ * The first plot is the next room's spot.
+ */
+export function buildPlots(state: GameState, l: Layout): Plot[] {
+  const kind: Role = RULES.roles[0] ?? 'product';
+  const size = RULES.roomSize;
+  const fp = footprint(kind, size);
+  const out: Plot[] = [];
+  for (let f = 0; f < state.floors && f < l.floors; f++) {
+    const floor = f as 0 | 1;
+    const spots = validSpots(state, kind, size, floor).slice().sort((a, b) => b.y - a.y || a.x - b.x);
+    const taken: { x: number; y: number }[] = [];
+    for (const s of spots) {
+      let free = true;
+      for (const t of taken) {
+        if (overlaps(s, t, fp.w, fp.h)) { free = false; break; }
+      }
+      if (!free) continue;
+      taken.push(s);
+      out.push({ floor, x: s.x, y: s.y, w: fp.w, h: fp.h, rect: rectOf(l, floor, s.x, s.y, fp.w, fp.h), next: out.length === 0 });
+    }
+  }
+  return out;
 }

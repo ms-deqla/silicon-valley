@@ -303,6 +303,43 @@ export const CONFIG = {
     /** hint line: "Support is swamped" below this served share */
     supportHintServed: 0.8,
   },
+
+  /**
+   * The coach's rules of thumb (DESIGN.md 18, "Coach rules"): advice thresholds, not engine
+   * mechanics. The advisor, the Playbook and tour texts, and the scripted tPlayer of the balance
+   * harness all read these same numbers, so the advice, the words and the measurement cannot drift.
+   */
+  coach: {
+    /** rule 1, investor knock: take when the runway is under this many months */
+    knockTakeRunwayMonths: 6,
+    /** rule 1, investor knock: take when the share sold is at most this and the money can be spent ... */
+    knockCheapShare: 0.15,
+    /** ... "the money can be spent" = at least this many game months remain in the round */
+    knockSpendMonthsLeft: 6,
+    /** rule 1, investor knock: decline when fewer than this many game months remain */
+    knockDeclineMonthsLeft: 4,
+    /** rule 1, investor knock: decline a share above this ... */
+    knockDearShare: 0.30,
+    /** ... when the runway is above this many months */
+    knockDearRunwayMonths: 8,
+    /** rules 3, 5, 6, 7: a hire needs this many months of the new run-rate in the bank; rule 1, late payer: press them under this many months of costs */
+    coverMonths: 3,
+    /** rule 1, press coverage: pay for the push only with more than this much cash */
+    pushCash: 25_000,
+    /** rule 5: the first support agent from this many customers */
+    supportCustomers: 10,
+    /** rules 8 and 9: the demo room and the growth hires above this much cash */
+    growthCash: 100_000,
+    /** rule 9 grows Product and Marketing to this many each (the Playbook: "a second engineer, then a second marketer") */
+    growthTeam: 2,
+    /** the Playbook's sequence: "After the second investor, decline unless you can spend the money before the buzzer" */
+    knocksTaken: 2,
+  },
+
+  postmortem: {
+    /** DESIGN.md 20, idle cash: a closed month with more than this in the bank and no hire */
+    idleCash: 150_000,
+  },
 } as const;
 
 export type Config = typeof CONFIG;

@@ -30,10 +30,11 @@ stay in the code and the tests but never reach the screen. Decided with the owne
   decline investors (equity only). Answer three events: late payer, press, outage.
 - **What happens by itself.** A hire gets a desk ($1k) and a laptop ($2k). The first
   hire of any department takes the garage's spare desk; when neither the garage nor a
-  room of that department has a free desk or desk space, a small room ($3k/mo rent) is
-  placed on the next free spot (lowest row first), so capex and rent still show in the
-  bars; the lobby appears with the first room. Firing removes the most recent hire in
-  that department with three months' severance; an emptied room keeps its rent.
+  room of that department has a free desk or desk space, a room of six desks ($4.5k/mo
+  rent) is placed on the next free spot (lowest row first), so capex and rent still show
+  in the bars; the lobby appears with the first room. Firing removes the most recent hire
+  in that department with three months' severance; an emptied room closes itself (see
+  "Space (v2)" below).
 - **Switched off.** Candidates, archetypes, quirks, morale-driven raises and quits
   (morale still moves with crowding and overload and scales output), Finance and R&D,
   loans and loan maturity, the ad budget, the competitor, poaching and recession
@@ -71,7 +72,8 @@ stay in the code and the tests but never reach the screen. Decided with the owne
   its last person leaves: its desks are sold at 60% of book and the rent stops. When the
   ground floor is full the next hire builds the second floor for a one-off $60k, shown
   on the + button as "+ $60k upstairs". The demo room keeps its footprint. Space never
-  blocks a hire until about 130 people.
+  blocks a hire until about 85 people (the garage's spare desk, six rooms downstairs and
+  eight upstairs on the 6×8 grid), far beyond a round.
 - **Coach (v2).** An advisor in the sim (`advisor.ts`) names the single best next action
   with a reason, from the Playbook rules in section 18. The hint line becomes the coach
   line with a tap that does it; the recommended board row pulses softly; every investor
@@ -451,21 +453,19 @@ appears here.
   test/balance.test.ts asserts the same lists at 20 seeds.
 - Tournament (section 0, the published rules): the tournament strategies × 200 seeds
   × 30 game months, everything read at the buzzer, medians over the seed set. The
-  scripted player (tPlayer) is a plausible careful human who follows the hint line,
-  not a bot: an engineer on day 0; a sales rep only when a prospect waits AND the cash
-  left after the setup covers 3 months of the new cost run-rate (today's costs plus
-  the salary and the rent of the room the hire would open); a marketer once the hint
-  says "Open Marketing", under the same cash rule; support from 10 customers under
-  the same cash rule (one hire a day, in that order: the hint itself puts a waiting
-  prospect before marketing); a server when short and the cash allows (a month of
-  costs stays in the bank); the demo room once cash tops $100k; the first two
-  investor knocks taken, every later scheduled knock declined, every lifeline
-  (desperation knock) taken. tTakeAll plays the same moves and takes every knock;
-  tDeclineAll plays them for a founder who plans for no round (6 months of cover per
-  hire) and declines every knock; tIdle never acts; tAggressive (an engineer every
-  month cash allows, every knock taken) is informational. Targets: tPlayer survives
+  scripted player (tPlayer) follows the coach of section 18 exactly, so the harness
+  measures the advice: each day it dispatches the advised action when the urgency is
+  "now" or "soon", and an "idea" once cash tops $100k (one tap a day); every card is
+  answered as `adviseCard` says, and where the coach has no view (a card kind without a
+  rule) it falls back to a careful founder's answers: the first two investor knocks
+  taken, every later scheduled knock declined, every lifeline (desperation knock)
+  taken. The coach's thresholds live in `CONFIG.coach`, which the Playbook texts and
+  the harness read too. tTakeAll is the same follower taking every investor card;
+  tDeclineAll the same follower declining every one (lifelines included); tIdle never
+  acts; tAggressive (an engineer every month cash allows, every knock taken, the
+  coach's other advice followed) is informational. Targets: tPlayer survives
   ≥ 80% and is dead by month 6 in at most 5% of the seeds; tPlayer median score in
-  [$2M, $6M] (a hint-following player over two and a half years: a business, not an
+  [$2M, $6M] (a coach-following player over two and a half years: a business, not an
   exit); tPlayer median score ≥ 2 × tIdle median score; tTakeAll median ≤ 1.5 ×
   tPlayer median (raising is a trade-off, not a free lunch); tDeclineAll median ≤
   tPlayer median; tIdle median under $1.5M. Pacing (tPlayer medians): the first

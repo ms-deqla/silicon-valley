@@ -2,8 +2,9 @@
  * Balance harness (DESIGN.md section 16), headless strategies × N seeds × M months.
  *
  * By default the published game: the tournament strategies (DESIGN.md 0 rules) over 30 game months,
- * a compact table (survival, early deaths, value, score, founder share, knocks taken at month 30), the
- * pacing table and the DESIGN 16 tournament targets with PASS / FAIL. With --full the engine strategies
+ * a compact table (survival, early deaths, value, score, founder share, knocks taken at month 30, and
+ * how much of the coach's advice each strategy took: DESIGN.md 18), the pacing table and the DESIGN 16
+ * tournament targets with PASS / FAIL. With --full the engine strategies
  * play the full engine over 60 months: the balance table, the pacing table, the five-year table and the
  * DESIGN 16 engine targets (balance at month 36, pacing, five-year guard at month 60).
  *
@@ -18,7 +19,7 @@
  * small scale, so the doc, the harness and the test share one definition of every target.
  */
 import { STRATEGIES, engineStrategies, runStrategy, strategyList, tournamentStrategies } from './strategies';
-import type { MonthTrace, Pacing, Strategy } from './strategies';
+import type { CoachStats, MonthTrace, Pacing, Strategy } from './strategies';
 import { CONFIG, RULES } from '../src/sim';
 
 // tsx runs this under Node; the project has no Node typings, so declare the two things we touch.
@@ -160,6 +161,8 @@ export interface RunRow {
   loan: boolean;
   /** equity rounds taken (knocks accepted) */
   rounds: number;
+  /** the coach's advice (DESIGN.md 18): days with a dispatchable advice, and those on which the strategy took it */
+  coach: CoachStats;
   error?: string;
 }
 
@@ -174,7 +177,7 @@ function emptyPacing(): Pacing {
 
 export function runOne(strategy: Strategy, seed: number, months: number): RunRow {
   try {
-    const { state, trace, pacing } = runStrategy(seed, strategy, months, { drainVisuals: true });
+    const { state, trace, pacing, coach } = runStrategy(seed, strategy, months, { drainVisuals: true, coach: true });
     return {
       seed,
       status: state.status,
@@ -185,9 +188,13 @@ export function runOne(strategy: Strategy, seed: number, months: number): RunRow
       equity: state.rounds.length > 0,
       loan: state.loan !== null || state.history.some((b) => b.fin.loanIn > 0),
       rounds: state.rounds.length,
+      coach,
     };
   } catch (e) {
-    return { seed, status: 'error', months: 0, endDay: 0, trace: [], pacing: emptyPacing(), equity: false, loan: false, rounds: 0, error: e instanceof Error ? e.message : String(e) };
+    return {
+      seed, status: 'error', months: 0, endDay: 0, trace: [], pacing: emptyPacing(), equity: false, loan: false, rounds: 0,
+      coach: { dispatchable: 0, taken: 0 }, error: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 
@@ -428,6 +435,13 @@ export interface TournamentSummary {
   shareMed: number;
   /** equity rounds taken per run, averaged */
   knocksTaken: number;
+  /**
+   * Coach advice taken (DESIGN.md 18, information only): the share of the days with a dispatchable
+   * advice on which the strategy dispatched exactly that action, pooled over the seed set (NaN when
+   * the coach never named an action), and the dispatchable-advice days per run.
+   */
+  adviceTaken: number;
+  adviceDays: number;
   customersMed: number;
   peopleMed: number;
   pacing: PacingStats;
@@ -441,6 +455,7 @@ export function summarizeTournament(name: string, rows: RunRow[], horizon: numbe
   const atMonth = n > 0 && horizon >= m;
   const value = rows.map((r) => valueAt(r, m, horizon));
   const score = rows.map((r) => scoreAt(r, m, horizon));
+  const adviceDays = rows.reduce((s, r) => s + r.coach.dispatchable, 0);
   return {
     name,
     n,
@@ -456,6 +471,8 @@ export function summarizeTournament(name: string, rows: RunRow[], horizon: numbe
     scoreP90: percentile(score, 0.9),
     shareMed: median(rows.map((r) => shareAt(r, m, horizon))),
     knocksTaken: n ? rows.reduce((s, r) => s + r.rounds, 0) / n : Number.NaN,
+    adviceTaken: adviceDays > 0 ? rows.reduce((s, r) => s + r.coach.taken, 0) / adviceDays : Number.NaN,
+    adviceDays: n ? adviceDays / n : Number.NaN,
     customersMed: median(rows.map((r) => traceFieldAt(r, m, horizon, 'customers'))),
     peopleMed: median(rows.map((r) => traceFieldAt(r, m, horizon, 'people'))),
     pacing: pacingOf(rows),
@@ -522,7 +539,7 @@ function printTable(summaries: Summary[], horizon: number): void {
 function printTournamentTable(summaries: TournamentSummary[], horizon: number): void {
   const m = TOURNAMENT_TARGET.month;
   const e = TOURNAMENT_TARGET.playerEarlyDeathMonth;
-  const header = ['strategy', 'runs', `survive@${m}`, `die@${m}`, `die@${e}`, 'err', `value@${m} p10/med/p90`, `score@${m} p10/med/p90`, `share@${m}`, 'knocks taken', `customers@${m}`, `people@${m}`, 'time'];
+  const header = ['strategy', 'runs', `survive@${m}`, `die@${m}`, `die@${e}`, 'err', `value@${m} p10/med/p90`, `score@${m} p10/med/p90`, `share@${m}`, 'knocks taken', 'coach advice taken', `customers@${m}`, `people@${m}`, 'time'];
   const rows = summaries.map((s) => [
     s.name,
     String(s.n),
@@ -534,12 +551,13 @@ function printTournamentTable(summaries: TournamentSummary[], horizon: number): 
     `${money(s.scoreP10)}/${money(s.scoreMed)}/${money(s.scoreP90)}`,
     pct(s.shareMed),
     Number.isFinite(s.knocksTaken) ? s.knocksTaken.toFixed(1) : 'n/a',
+    Number.isFinite(s.adviceTaken) ? `${pct(s.adviceTaken)} of ${s.adviceDays.toFixed(0)}/run` : 'n/a',
     num(s.customersMed),
     num(s.peopleMed),
     `${s.seconds.toFixed(1)}s`,
   ]);
   console.log(table([header, ...rows]));
-  console.log(`(tournament rules, DESIGN.md 0; horizon ${horizon} months, everything read at the buzzer (month ${m}); medians over seeds; dead runs count as $0 for value and score; knocks taken = equity rounds per run)`);
+  console.log(`(tournament rules, DESIGN.md 0; horizon ${horizon} months, everything read at the buzzer (month ${m}); medians over seeds; dead runs count as $0 for value and score; knocks taken = equity rounds per run; coach advice taken = share of the days on which the coach named an action the sim would accept (DESIGN.md 18) that the strategy dispatched, pooled over the seeds, and such days per run: information, not a target)`);
 }
 
 /** The pacing table; both the engine and the tournament summaries carry a PacingStats. */

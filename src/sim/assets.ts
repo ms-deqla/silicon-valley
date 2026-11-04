@@ -209,6 +209,23 @@ export function sell(state: GameState, assetId: string): number {
   return proceeds;
 }
 
+// ---------------------------------------------------------------- disposal (a room closing)
+
+/** Sells one asset at resale through the ledger and removes it; no log line, the caller tells the story. Returns proceeds. */
+export function dispose(state: GameState, asset: Asset): number {
+  const proceeds = L.recordDisposal(state, asset);
+  const i = state.assets.indexOf(asset);
+  if (i >= 0) state.assets.splice(i, 1);
+  return proceeds;
+}
+
+/** DESIGN.md 5: a closing room sells every desk standing in it at 60% of book. Returns the proceeds. */
+export function disposeDesksIn(state: GameState, roomId: string): number {
+  let proceeds = 0;
+  for (const desk of S.desksIn(state, roomId)) proceeds += dispose(state, desk);
+  return proceeds;
+}
+
 // ---------------------------------------------------------------- month end
 
 /** Straight line: cost / lifeMonths per month, never below 0; books via ledger.recordDepreciation. */

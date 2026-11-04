@@ -8,11 +8,14 @@
  * set (3 seeds flip a month-granular median on one lucky run); the 200-seed tables are
  * `pnpm balance` and `pnpm balance --full` (scripts/balance.ts).
  *
+ * The tournament player (tPlayer) is the coach's follower (DESIGN.md 18), so the tournament
+ * targets measure the advice itself: they can only pass once the coach names actions.
+ *
  * runStrategy plays every strategy under its own ruleset; the describe blocks still name the
  * ruleset they assert under (useTournamentRules / useFullEngine from test/setup.ts).
  */
 import { describe, expect, it } from 'vitest';
-import { CONFIG } from '../src/sim';
+import { CONFIG, advise, createGame } from '../src/sim';
 import { balanced, idle, reckless, runStrategy, strategyList, tDeclineAll, tIdle, tPlayer, tTakeAll } from '../scripts/strategies';
 import { TARGET, TOURNAMENT_TARGET, evaluateTargets, evaluateTournamentTargets, runRows, summarize, summarizeTournament } from '../scripts/balance';
 import { useFullEngine, useTournamentRules } from './setup';
@@ -27,7 +30,7 @@ const D = CONFIG.time.daysPerMonth;
 describe('balance smoke', () => {
   for (const strategy of strategyList) {
     it.each(SEEDS)(`${strategy.name} (${strategy.engine}): seed %i plays ${MONTHS} months without throwing`, (seed) => {
-      const { state, trace, pacing } = runStrategy(seed, strategy, MONTHS, { drainVisuals: true });
+      const { state, trace, pacing, coach } = runStrategy(seed, strategy, MONTHS, { drainVisuals: true, coach: true });
       expect(['playing', 'gameOver', 'sold']).toContain(state.status);
       expect(trace.length).toBe(state.history.length);
       if (state.status === 'playing') {
@@ -51,6 +54,10 @@ describe('balance smoke', () => {
         expect(state.actions.every((a) => a.action.type !== 'buyAsset' || a.action.kind === 'server')).toBe(true);
         expect(state.loan).toBeNull();
       }
+      // the coach's advice is counted on every day it names a dispatchable action; nobody takes more than that,
+      // and tPlayer follows the coach exactly (DESIGN.md 18), whatever the coach says
+      expect(coach.taken).toBeLessThanOrEqual(coach.dispatchable);
+      if (strategy === tPlayer) expect(coach.taken, 'tPlayer takes every dispatchable advice').toBe(coach.dispatchable);
     }, 20_000);
   }
 
@@ -73,6 +80,15 @@ describe('DESIGN.md 16 tournament targets at small scale (20 seeds)', () => {
   const horizon = TOURNAMENT_TARGET.month;
   const summaries = [tIdle, tPlayer, tTakeAll, tDeclineAll].map((s) => summarizeTournament(s.name, runRows(s, TARGET_SEEDS, horizon), horizon));
   const targets = evaluateTournamentTargets(summaries, horizon);
+  // DESIGN.md 18 rule 2: with no feature and no engineer the coach says "hire an engineer", now
+  const dayZero = advise(createGame(TARGET_SEEDS[0]));
+
+  it('the coach names the first engineer on day 0 (DESIGN.md 18 rule 2): tPlayer follows it, so the targets below measure the advice', () => {
+    expect(dayZero.action).toEqual({ type: 'hireRole', role: 'product' });
+    expect(dayZero.urgency).toBe('now');
+    const player = summaries.find((s) => s.name === 'tPlayer');
+    expect(player?.adviceTaken, 'share of the coach\'s dispatchable advice tPlayer took').toBe(1);
+  });
 
   it('evaluates every tournament target (nothing n/a) and nothing threw', () => {
     expect(targets.length).toBe(13);

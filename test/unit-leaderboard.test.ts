@@ -4,9 +4,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RULES } from '../src/sim/config';
-import { LOCAL_ID, bestOf, createLeaderboard, sortEntries, sortEntriesByBest, standing } from '../src/ui/leaderboard';
-import type { LeaderEntry, Leaderboard } from '../src/ui/leaderboard';
-import { entryAmount, entryStatus, storeCaption, unposted } from '../src/ui/leaderstrip';
+import { COLORS, DEFAULT_COLOR, LOCAL_ID, bestOf, createLeaderboard, isColor, sortEntries, sortEntriesByBest, standing } from '../src/ui/leaderboard';
+import type { Color, LeaderEntry, Leaderboard } from '../src/ui/leaderboard';
+import { entryAmount, entryStatus, paceLine, storeCaption, unposted } from '../src/ui/leaderstrip';
 
 const SEED = 20261103;
 const KEY = 'brightbyte.tournament.v1';
@@ -189,8 +189,34 @@ describe('leaderboard on the shared store', () => {
     await lb.start('  Mike  ', SEED);
     await flush();
     expect(fake.setCalls).toBe(1);
-    expect(fake.docs.get('scores/u1')).toEqual({ name: 'Mike', seed: SEED, value: 0, score: 0, best: 0, month: 0, status: 'playing', updatedAt: expect.any(Number) });
+    expect(fake.docs.get('scores/u1')).toEqual({ name: 'Mike', color: DEFAULT_COLOR, seed: SEED, value: 0, score: 0, best: 0, month: 0, status: 'playing', updatedAt: expect.any(Number) });
     expect(fake.listeners.size).toBe(1);
+  });
+
+  it('the chosen colour round-trips through the document (DESIGN.md 20); an unknown or missing one reads as the default', async () => {
+    const fake = createFakeDb();
+    fake.put('scores/u2', doc({ name: 'Mint', color: 'mint', score: 50 }));
+    fake.put('scores/u3', doc({ name: 'Odd', color: 'chartreuse', score: 40 }));
+    fake.put('scores/u4', doc({ name: 'Old', score: 30 }));
+    stubViewer(fake);
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    await lb.start('Mike', SEED, 'lilac');
+    await flush();
+    expect(fake.docs.get('scores/u1')).toMatchObject({ name: 'Mike', color: 'lilac', seed: SEED });
+    const byId = new Map(seen[seen.length - 1].map((e) => [e.id, e.color]));
+    expect(byId.get('u1')).toBe('lilac');
+    expect(byId.get('u2')).toBe('mint');
+    expect(byId.get('u3')).toBe(DEFAULT_COLOR);
+    expect(byId.get('u4')).toBe(DEFAULT_COLOR);
+    // a colour the list does not know is never written
+    await lb.start('Mike', SEED, 'plaid' as unknown as Color);
+    await flush();
+    expect(fake.docs.get('scores/u1')).toMatchObject({ color: DEFAULT_COLOR });
+    expect(COLORS).toHaveLength(8);
+    for (const c of COLORS) expect(isColor(c)).toBe(true);
+    expect(isColor('')).toBe(false);
   });
 
   it('trims the typed name to 24 characters and never stores an empty one', async () => {
@@ -620,12 +646,26 @@ describe('leaderboard without the shared store', () => {
     await lb.start('Mike', SEED);
     lb.post({ value: 120, score: 90, month: 2, status: 'playing' });
     const stored = JSON.parse(localStorage.getItem(KEY) as string) as Record<string, Record<string, unknown>>;
-    expect(stored[String(SEED)]).toEqual({ name: 'Mike', seed: SEED, value: 120, score: 90, best: 0, month: 2, status: 'playing', updatedAt: expect.any(Number) });
+    expect(stored[String(SEED)]).toEqual({ name: 'Mike', color: DEFAULT_COLOR, seed: SEED, value: 120, score: 90, best: 0, month: 2, status: 'playing', updatedAt: expect.any(Number) });
     const last = seen[seen.length - 1];
     expect(last).toHaveLength(1);
     expect(last[0]).toEqual({ id: LOCAL_ID, me: true, abandoned: false, ...stored[String(SEED)] });
     lb.post({ value: 120, score: 60, month: 2, status: 'dead' });
     expect(JSON.parse(localStorage.getItem(KEY) as string)[String(SEED)]).toMatchObject({ status: 'dead', score: 60, best: 60 });
+  });
+
+  it('the local fallback keeps the colour with the run', async () => {
+    const read = (): Record<string, unknown> => JSON.parse(localStorage.getItem(KEY) as string)[String(SEED)] as Record<string, unknown>;
+    const lb = make();
+    await lb.start('Mike', SEED, 'peach');
+    expect(read()).toMatchObject({ color: 'peach' });
+    const lb2 = make();
+    const seen: LeaderEntry[][] = [];
+    lb2.subscribe((entries) => seen.push(entries));
+    lb2.watch(SEED);
+    await lb2.ready;
+    await flush();
+    expect(seen[seen.length - 1][0]).toMatchObject({ id: LOCAL_ID, me: true, color: 'peach' });
   });
 
   it('the local fallback keeps the best across start() and across page loads', async () => {
@@ -658,7 +698,8 @@ describe('leaderboard without the shared store', () => {
     lb.watch(SEED);
     await lb.ready;
     await flush();
-    expect(seen[seen.length - 1]).toEqual([{ id: LOCAL_ID, me: true, abandoned: false, ...stored }]);
+    // a run stored before colours existed reads with the default colour
+    expect(seen[seen.length - 1]).toEqual([{ id: LOCAL_ID, me: true, abandoned: false, color: DEFAULT_COLOR, ...stored }]);
     lb.watch(SEED + 1);
     await flush();
     expect(seen[seen.length - 1]).toEqual([]);
@@ -719,7 +760,7 @@ describe('leaderboard without the shared store', () => {
 });
 
 describe('sortEntries', () => {
-  const entry = (over: Partial<LeaderEntry>): LeaderEntry => ({ id: 'x', name: 'x', seed: SEED, value: 0, score: 0, best: 0, month: 0, status: 'playing', updatedAt: 0, me: false, abandoned: false, ...over });
+  const entry = (over: Partial<LeaderEntry>): LeaderEntry => ({ id: 'x', name: 'x', color: DEFAULT_COLOR, seed: SEED, value: 0, score: 0, best: 0, month: 0, status: 'playing', updatedAt: 0, me: false, abandoned: false, ...over });
 
   it('everyone by standing, runs left mid-round last; ties by name then id', () => {
     const sorted = sortEntries([
@@ -756,6 +797,19 @@ describe('sortEntries', () => {
     expect(entryStatus(entry({ month: 7, abandoned: true }))).toBe('Abandoned · month 7');
     expect(entryStatus(entry({ month: 7 }))).toBe('Playing · month 7');
     expect(entryAmount(entry({ value: 1234, score: 600 }))).toBe(entryAmount(entry({ status: 'sold', value: 0, score: 600 })));
+  });
+
+  it('the pace line under your chip (DESIGN.md 20): the gap to the leader, "You lead", nothing when you are not listed', () => {
+    const katia = entry({ id: 'k', name: 'Katia', score: 820_000 });
+    const me = entry({ id: 'me', name: 'Mike', score: 700_000, me: true });
+    expect(paceLine(sortEntries([katia, me]))).toBe('$120k behind Katia');
+    expect(paceLine(sortEntries([entry({ id: 'k', name: 'Katia', score: 500 }), me]))).toBe('You lead');
+    expect(paceLine([me])).toBe('You lead');
+    expect(paceLine(sortEntries([entry({ id: 'k', name: 'Katia', score: 700_000 }), me]))).toBe('Level with Katia');
+    // a run left mid-round sits last, so its frozen standing never leads
+    expect(paceLine(sortEntries([entry({ id: 'g', name: 'Gone', score: 9_000_000, abandoned: true }), me]))).toBe('You lead');
+    expect(paceLine(sortEntries([katia]))).toBe('');
+    expect(paceLine([])).toBe('');
   });
 });
 

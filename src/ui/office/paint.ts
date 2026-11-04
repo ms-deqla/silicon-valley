@@ -1,24 +1,29 @@
 /**
  * The painter: draws one frame of the office floor from the cached layout,
  * the cached scene, the crowd and a few per-frame numbers. The static ground
- * (grass, scenery, lot slabs, street) is rendered once per layout into an
- * offscreen layer and blitted; everything else that can be precomputed
- * (fonts, dashes, tints, label widths, scenery positions) is cached, so the
- * per-frame path allocates nothing beyond what the canvas API itself does.
- * Without a DOM (unit tests) the ground is drawn directly every frame.
- * DESIGN.md sections 3 (art register), 5 (building), 13 (crowd).
+ * (grass, scenery, lot slabs, street, lamp posts) is rendered once per layout
+ * into an offscreen layer and blitted; figures, desks and chairs are sprites
+ * drawn once per look into small offscreen canvases; everything else that can
+ * be precomputed (fonts, dashes, tints, label widths, scenery positions) is
+ * cached, so the per-frame path allocates nothing beyond what the canvas API
+ * itself does. Without a DOM (unit tests) everything is drawn directly.
+ * DESIGN.md sections 3 (art register), 5 (building), 13 (crowd), 17 (visual language).
  */
 import type { PlacementMode } from '../api';
 import { BACK_WALL, SIDE_WALL, cellRect, footprint, rectOf } from './layout';
 import type { Layout, Rect } from './layout';
-import type { RoomView, Scene, SeatInfo } from './scene';
+import type { Plot, RoomView, Scene, SeatInfo } from './scene';
 import type { Crowd, Effect, Walker } from './walkers';
+import { walkFrame } from './walkers';
 import * as P from './palette';
 import {
   FONT, OUTLINE, circle, circleO, clearShadow, drawFigure, drawGlyph, ellipse, fillRR, fillStrokeRR, line, ring, rr,
   shadowRR, strokeRR,
 } from './primitives';
 import type { Ctx } from './primitives';
+import { createSpriteCache, drawSprite, getSprite, resetSpriteCache } from './sprites';
+import type { SpriteCache } from './sprites';
+import { busDir, busProgress, busX } from './street';
 import { clamp, easeInOutQuad, easeOutCubic, formatMoney, hash2 } from './util';
 
 export interface FrameInfo {
@@ -60,21 +65,31 @@ interface Car {
   fill: string;
 }
 
+/** a lamp post on the pavement: base point */
+interface Post {
+  x: number;
+  y: number;
+}
+
 export interface Painter {
   ctx: Ctx;
   cell: number;
-  /** backing-store px per CSS px, set by the renderer; the ground layer is rendered at this scale */
+  /** backing-store px per CSS px, set by the renderer; the ground layer and the sprites are rendered at this scale */
   scaleX: number;
   scaleY: number;
   fontLabel: string;
   fontSign: string;
   fontCoin: string;
   fontBadge: string;
+  fontBrand: string;
+  fontPlot: string;
   /** px size of fontSign, so the sign box grows with the font's 9px floor on small cells */
   signFontPx: number;
+  coinFontPx: number;
   dash: number[];
   noDash: number[];
   roadDash: number[];
+  plotDash: number[];
   /** gradients, rebuilt when the layout (or the context that draws them) changes */
   grass: CanvasGradient | null;
   road: CanvasGradient | null;
@@ -83,6 +98,10 @@ export interface Painter {
   signText: string;
   signAr: number;
   signW: number;
+  /** "Build here" and the brand name, measured once per font */
+  plotTextW: number;
+  brandText: string;
+  brandW: number;
   stairShades: string[];
   tmp: Rect;
   /** scenery placed around the lot, rebuilt when the layout changes */
@@ -90,6 +109,7 @@ export interface Painter {
   trees: Tree[];
   blobs: Blob[];
   cars: Car[];
+  posts: Post[];
   /** the offscreen ground layer; null without a DOM, then the ground is drawn directly each frame */
   ground: HTMLCanvasElement | null;
   groundCtx: Ctx | null;
@@ -97,6 +117,11 @@ export interface Painter {
   groundDoorX: number;
   groundScaleX: number;
   groundScaleY: number;
+  /** sprites: seated figures, desks and chairs, drawn once per look and cell size */
+  sprites: SpriteCache;
+  drawSeat: (g: Ctx, seat: SeatInfo, ox: number, oy: number) => void;
+  drawDesk: (g: Ctx, laptop: boolean, ox: number, oy: number) => void;
+  drawChair: (g: Ctx, empty: boolean, ox: number, oy: number) => void;
 }
 
 const STAIR_STEPS = 6;
@@ -120,6 +145,35 @@ const CHAIR = '#3F4553';
 const CHAIR_PAD = '#555B6B';
 const SCREEN_DARK = '#3C4252';
 const SCREEN_LIT = '#9CC4F4';
+const SCREEN_GLOW = 'rgba(170,210,255,0.45)';
+const SCREEN_PULSE = '#CFE6FF';
+const BUS_BODY = '#F3C64B';
+const BUS_DARK = '#C99A1E';
+const BUS_GLASS = '#CFE6F7';
+/** the floor darkens toward the back wall: bands of shadow under it, strongest first (DESIGN 17) */
+const BACK_SHADE = ['rgba(20,20,40,0.12)', 'rgba(20,20,40,0.085)', 'rgba(20,20,40,0.055)', 'rgba(20,20,40,0.035)', 'rgba(20,20,40,0.018)'];
+const BACK_SHADE_H = 0.045;
+const PLOT_FAINT = 'rgba(80,65,45,0.38)';
+const PLOT_FILL = 'rgba(255,255,255,0.22)';
+const PLOT_TEXT = 'rgba(70,55,35,0.85)';
+const BRAND_PLAQUE = '#FFFFFF';
+/** below this cell size room labels and the plaque show their glyph only */
+const LABEL_TEXT_MIN_CELL = 24;
+/** sprite boxes in cells: seated figure (anchor at the feet), desk (anchor at its centre), chair (anchor at the feet) */
+const SEAT_BOX_W = 0.72;
+const SEAT_BOX_H = 0.78;
+const SEAT_BOX_OY = 0.72;
+const DESK_BOX_W = 0.76;
+const DESK_BOX_H = 0.52;
+const DESK_BOX_OY = 0.3;
+const CHAIR_BOX_W = 0.42;
+const CHAIR_BOX_H = 0.46;
+const CHAIR_BOX_OY = 0.43;
+const SEAT_KEY = 's|';
+const DESK_KEY_MONITOR = 'desk|m';
+const DESK_KEY_LAPTOP = 'desk|l';
+const CHAIR_KEY_BACK = 'chair|b';
+const CHAIR_KEY_EMPTY = 'chair|e';
 
 export function createPainter(ctx: Ctx): Painter {
   const shades: string[] = [];
@@ -147,10 +201,14 @@ export function createPainter(ctx: Ctx): Painter {
     fontSign: '',
     fontCoin: '',
     fontBadge: '',
+    fontBrand: '',
+    fontPlot: '',
     signFontPx: 9,
+    coinFontPx: 11,
     dash: [4, 3],
     noDash: [],
     roadDash: [12, 10],
+    plotDash: [6, 4],
     grass: null,
     road: null,
     gradFor: null,
@@ -158,19 +216,31 @@ export function createPainter(ctx: Ctx): Painter {
     signText: '',
     signAr: NaN,
     signW: -1,
+    plotTextW: -1,
+    brandText: '',
+    brandW: -1,
     stairShades: shades,
     tmp: { x: 0, y: 0, w: 0, h: 0 },
     decorFor: null,
     trees: [],
     blobs: [],
     cars: [],
+    posts: [],
     ground,
     groundCtx,
     groundFor: null,
     groundDoorX: NaN,
     groundScaleX: 0,
     groundScaleY: 0,
+    sprites: createSpriteCache(),
+    drawSeat: () => undefined,
+    drawDesk: () => undefined,
+    drawChair: () => undefined,
   };
+  // the sprite painters read the cell from the painter, so they are created once and never per frame
+  p.drawSeat = (g, seat, ox, oy) => drawFigure(g, ox, oy, SEAT_H * p.cell, seat.look, 0, -1, true, 1, 1);
+  p.drawDesk = (g, laptop, ox, oy) => paintDeskShape(g, p.cell, ox, oy, laptop);
+  p.drawChair = (g, empty, ox, oy) => paintChairShape(g, p.cell, ox, oy, empty);
   setPainterCell(p, 40);
   return p;
 }
@@ -181,29 +251,40 @@ export function setPainterCell(p: Painter, cell: number): void {
   p.fontLabel = `600 ${Math.max(10, Math.round(cell * 0.21))}px ${FONT}`;
   p.signFontPx = Math.max(9, Math.round(cell * 0.16));
   p.fontSign = `700 ${p.signFontPx}px ${FONT}`;
-  p.fontCoin = `800 ${Math.max(11, Math.round(cell * 0.25))}px ${FONT}`;
+  p.coinFontPx = Math.max(11, Math.round(cell * 0.24));
+  p.fontCoin = `800 ${p.coinFontPx}px ${FONT}`;
   p.fontBadge = `700 ${Math.max(9, Math.round(cell * 0.16))}px ${FONT}`;
+  p.fontBrand = `800 ${Math.max(8, Math.round(cell * 0.17))}px ${FONT}`;
+  p.fontPlot = `700 ${Math.max(9, Math.round(cell * 0.17))}px ${FONT}`;
   p.dash = [Math.max(3, cell * 0.12), Math.max(3, cell * 0.09)];
   p.roadDash = [Math.max(6, cell * 0.5), Math.max(5, cell * 0.4)];
+  p.plotDash = [Math.max(4, cell * 0.16), Math.max(3, cell * 0.1)];
   p.signAr = NaN;
   p.signW = -1;
+  p.plotTextW = -1;
+  p.brandW = -1;
   p.groundFor = null;
+  resetSpriteCache(p.sprites, cell, Math.max(p.scaleX, p.scaleY));
 }
 
-/** The backing-store scale (device pixel ratio × the shell's column scale) the ground layer must match. */
+/** The backing-store scale (device pixel ratio × the shell's column scale) the ground layer and the sprites must match. */
 export function setPainterScale(p: Painter, scaleX: number, scaleY: number): void {
   p.scaleX = scaleX > 0 ? scaleX : 1;
   p.scaleY = scaleY > 0 ? scaleY : 1;
+  resetSpriteCache(p.sprites, p.cell, Math.max(p.scaleX, p.scaleY));
 }
 
 export function paintFrame(p: Painter, l: Layout, scene: Scene, crowd: Crowd, info: FrameInfo): void {
   if (p.decorFor !== l) buildDecor(p, l);
   paintGround(p, l, scene.anchors.door.x);
+  if (scene.plots.length > 0) paintPlots(p, l, scene.plots);
   for (let i = 0; i < scene.rooms.length; i++) paintRoom(p, l, scene, scene.rooms[i], crowd, info);
+  if (l.floors === 2) paintRailing(p.ctx, l);
   paintDoor(p, l, scene);
   if (scene.lobby && info.ar > 0) paintSign(p, l, scene, info);
   if (info.selectedRoomId) paintSelection(p, l, scene, info);
   paintWalkers(p, l, crowd);
+  paintBus(p.ctx, l, info.time);
   paintEffects(p, l, crowd);
   if (info.placement) paintPlacement(p, l, info.placement, info.pressedSpot);
 }
@@ -216,6 +297,7 @@ function buildDecor(p: Painter, l: Layout): void {
   p.trees.length = 0;
   p.blobs.length = 0;
   p.cars.length = 0;
+  p.posts.length = 0;
   const c = l.cell;
   if (!(c > 0)) return;
   /** grass margin either side of the lot (the lot is centred) */
@@ -238,10 +320,16 @@ function buildDecor(p: Painter, l: Layout): void {
     p.blobs.push({ x: xl - m * 0.2, y: f0 + 6.9 * c, rx: m * 0.65, ry: 0.6 * c });
     p.blobs.push({ x: xr + m * 0.15, y: top + 5.2 * c, rx: m * 0.5, ry: 0.65 * c });
   }
-  // parked cars on the near lane, clear of both possible door crossings (garage at x=1, lobby at x=3)
+  // parked cars on the far lane, clear of both possible door crossings (garage at x=1, lobby at x=3)
   const yb = l.streetTop + PAVE * c + 0.48 * c;
   p.cars.push({ x: l.x0 - 0.25 * c, y: yb, dir: 1, fill: '#8DB4E2' });
   p.cars.push({ x: l.x0 + 4.75 * c, y: yb, dir: -1, fill: '#F2A9A2' });
+  // DESIGN 17: two lamp posts on the pavement, beside the lot so they rise over the grass, not over rooms
+  if (m > 0.7 * c) {
+    const py = l.streetTop + PAVE * c - 0.06 * c;
+    p.posts.push({ x: l.x0 - 0.5 * c, y: py });
+    p.posts.push({ x: l.x0 + l.lotW + 0.5 * c, y: py });
+  }
 }
 
 function addTree(p: Painter, x: number, y: number, r: number, shrub: boolean, tone: number): void {
@@ -280,6 +368,7 @@ function drawGround(p: Painter, ctx: Ctx, l: Layout, doorX: number): void {
   if (l.stair) paintStairs(p, ctx, l);
   paintTrees(ctx, p.trees);
   paintCars(ctx, l.cell, p.cars);
+  paintPosts(ctx, l.cell, p.posts);
 }
 
 function paintBackground(p: Painter, ctx: Ctx, l: Layout): void {
@@ -356,28 +445,44 @@ function paintStreet(p: Painter, ctx: Ctx, l: Layout, doorX: number): void {
   for (let i = 0; i < ZEBRA_N; i++) ctx.fillRect(zx0 + i * (stripe + gap), roadTop + 0.08 * c, stripe, roadH - 0.16 * c);
 }
 
-/** One floor's lot: warm pavement with a two-tone tile pattern, a soft inset shadow and a drop shadow. */
+/**
+ * One floor's lot: warm pavement with a two-tone tile pattern, a soft inset shadow
+ * and a drop shadow. Floor 1 is the glass storey (DESIGN 0): a translucent pale slab
+ * with a sheen and a light-blue edge.
+ */
 function paintSlab(p: Painter, ctx: Ctx, l: Layout, floor: 0 | 1): void {
   const c = l.cell;
   const r = rectOf(l, floor, 0, 0, l.cols, l.rowsPerFloor, p.tmp);
   const rad = c * 0.22;
-  shadowRR(ctx, r.x, r.y, r.w, r.h, rad, P.LOT, c * 0.5, c * 0.14, 'rgba(30,40,70,0.26)');
+  const glass = floor === 1;
+  shadowRR(ctx, r.x, r.y, r.w, r.h, rad, glass ? P.GLASS_SLAB : P.LOT, c * 0.5, c * 0.14, 'rgba(30,40,70,0.26)');
   ctx.save();
   rr(ctx, r.x, r.y, r.w, r.h, rad);
   ctx.clip();
-  ctx.fillStyle = P.LOT_LIGHT;
+  ctx.fillStyle = glass ? 'rgba(255,255,255,0.35)' : P.LOT_LIGHT;
   for (let j = 0; j < l.rowsPerFloor; j++) {
     for (let i = j & 1; i < l.cols; i += 2) ctx.fillRect(r.x + i * c, r.y + j * c, c, c);
   }
+  if (glass) {
+    // a diagonal sheen across the glass
+    ctx.fillStyle = P.GLASS_SHEEN;
+    ctx.beginPath();
+    ctx.moveTo(r.x + r.w * 0.55, r.y);
+    ctx.lineTo(r.x + r.w * 0.8, r.y);
+    ctx.lineTo(r.x + r.w * 0.3, r.y + r.h);
+    ctx.lineTo(r.x + r.w * 0.05, r.y + r.h);
+    ctx.closePath();
+    ctx.fill();
+  }
   // inset shadow: a stroke entirely outside the clip whose blurred shadow bleeds inwards
-  ctx.shadowColor = 'rgba(30,35,60,0.36)';
+  ctx.shadowColor = glass ? 'rgba(60,100,150,0.3)' : 'rgba(30,35,60,0.36)';
   ctx.shadowBlur = c * 0.55;
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
   strokeRR(ctx, r.x - c * 0.5 - 1, r.y - c * 0.5 - 1, r.w + c + 2, r.h + c + 2, rad + c * 0.5, '#000000', c);
   clearShadow(ctx);
   ctx.restore();
-  strokeRR(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, rad, 'rgba(70,55,40,0.2)', 1);
+  strokeRR(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, rad, glass ? P.GLASS_EDGE : 'rgba(70,55,40,0.2)', glass ? Math.max(1, c * 0.04) : 1);
 }
 
 function paintStairs(p: Painter, ctx: Ctx, l: Layout): void {
@@ -393,6 +498,37 @@ function paintStairs(p: Painter, ctx: Ctx, l: Layout): void {
   const lw = Math.max(1, c * 0.04);
   line(ctx, s.x + c * 0.06, s.y - c * 0.04, s.x + c * 0.06, s.y + s.h + c * 0.04, '#8E8A82', lw);
   line(ctx, s.x + s.w - c * 0.06, s.y - c * 0.04, s.x + s.w - c * 0.06, s.y + s.h + c * 0.04, '#8E8A82', lw);
+}
+
+/** The glass storey's railing along its street-side edge, posts and a top rail, clear of the stairs (DESIGN 0). */
+function paintRailing(ctx: Ctx, l: Layout): void {
+  const c = l.cell;
+  const y = l.gapTop;
+  const x0 = l.x0 + c * 0.12;
+  const x1 = (l.stair ? l.stair.x : l.x0 + l.lotW) - c * 0.14;
+  if (x1 <= x0) return;
+  const h = c * 0.2;
+  const lw = Math.max(1, c * 0.035);
+  ctx.strokeStyle = P.RAIL;
+  ctx.lineWidth = lw;
+  ctx.beginPath();
+  const pitch = Math.max(4, c * 0.4);
+  for (let x = x0; x <= x1; x += pitch) {
+    ctx.moveTo(x, y - h);
+    ctx.lineTo(x, y + c * 0.02);
+  }
+  ctx.stroke();
+  ctx.lineWidth = Math.max(1.5, c * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(x0, y - h);
+  ctx.lineTo(x1, y - h);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x0, y - h - 1);
+  ctx.lineTo(x1, y - h - 1);
+  ctx.stroke();
 }
 
 function paintTrees(ctx: Ctx, trees: Tree[]): void {
@@ -444,6 +580,22 @@ function paintCars(ctx: Ctx, c: number, cars: Car[]): void {
   }
 }
 
+/** DESIGN 17: lamp posts on the pavement, a pole with a warm lantern and a pool of light. */
+function paintPosts(ctx: Ctx, c: number, posts: Post[]): void {
+  const lw = Math.max(1.5, c * 0.05);
+  const hgt = 1.25 * c;
+  for (let i = 0; i < posts.length; i++) {
+    const k = posts[i];
+    ellipse(ctx, k.x, k.y + 0.02 * c, 0.3 * c, 0.09 * c, P.LAMP_LIGHT);
+    ellipse(ctx, k.x, k.y, 0.09 * c, 0.035 * c, P.LAMP_POLE);
+    line(ctx, k.x, k.y, k.x, k.y - hgt, P.LAMP_POLE, lw);
+    fillStrokeRR(ctx, k.x - 0.09 * c, k.y - hgt - 0.14 * c, 0.18 * c, 0.2 * c, c * 0.03, '#5A5650', OUTLINE, 1);
+    fillRR(ctx, k.x - 0.065 * c, k.y - hgt - 0.11 * c, 0.13 * c, 0.14 * c, c * 0.02, P.LAMP_BULB);
+    ellipse(ctx, k.x, k.y - hgt - 0.04 * c, 0.22 * c, 0.16 * c, P.LAMP_LIGHT);
+    fillRR(ctx, k.x - 0.11 * c, k.y - hgt - 0.17 * c, 0.22 * c, 0.04 * c, c * 0.01, '#3F3C38');
+  }
+}
+
 /** The street door: a glass double door on the hall's bottom edge, with a mat. */
 function paintDoor(p: Painter, l: Layout, scene: Scene): void {
   const ctx = p.ctx;
@@ -462,6 +614,95 @@ function paintDoor(p: Painter, l: Layout, scene: Scene): void {
   fillRR(ctx, d.x - 0.16 * c, d.y + 0.05 * c, 0.32 * c, 0.09 * c, c * 0.02, '#9C7A57');
 }
 
+/** DESIGN 17: the bus that crosses on the near lane every BUS_PERIOD seconds. */
+function paintBus(ctx: Ctx, l: Layout, time: number): void {
+  const pr = busProgress(time);
+  if (pr < 0) return;
+  const c = l.cell;
+  const dir = busDir(time);
+  const bw = 2.4 * c;
+  const bh = 0.46 * c;
+  const x = busX(pr, dir, l.width, bw * 0.6);
+  const roadTop = l.streetTop + PAVE * c;
+  const yb = roadTop + l.streetH - PAVE * c - 0.1 * c;
+  const top = yb - 0.08 * c - bh;
+  ellipse(ctx, x, yb, bw * 0.5, 0.07 * c, 'rgba(20,20,40,0.2)');
+  fillStrokeRR(ctx, x - bw / 2, top, bw, bh, 0.09 * c, BUS_BODY, OUTLINE, 1);
+  ctx.fillStyle = BUS_DARK;
+  ctx.fillRect(x - bw / 2 + 0.05 * c, top + bh - 0.1 * c, bw - 0.1 * c, 0.05 * c);
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillRect(x - bw / 2 + 0.08 * c, top + 0.03 * c, bw - 0.16 * c, 0.04 * c);
+  const winY = top + 0.09 * c;
+  const winH = 0.17 * c;
+  const winW = 0.34 * c;
+  const n = 4;
+  const doorX = x + dir * (bw / 2 - 0.5 * c);
+  for (let i = 0; i < n; i++) {
+    const wx = x - bw / 2 + 0.18 * c + i * 0.44 * c + (dir > 0 ? 0 : 0.48 * c);
+    fillRR(ctx, wx, winY, winW, winH, 0.03 * c, BUS_GLASS);
+  }
+  fillStrokeRR(ctx, doorX - 0.15 * c, winY, 0.3 * c, bh - 0.2 * c, 0.03 * c, BUS_GLASS, BUS_DARK, 1);
+  ctx.fillStyle = '#FFF2B0';
+  ctx.fillRect(x + dir * (bw / 2 - 0.07 * c) - 0.025 * c, top + bh - 0.2 * c, 0.05 * c, 0.07 * c);
+  ctx.fillStyle = '#E8625A';
+  ctx.fillRect(x - dir * (bw / 2 - 0.07 * c) - 0.025 * c, top + bh - 0.2 * c, 0.05 * c, 0.07 * c);
+  circleO(ctx, x - 0.8 * c, yb - 0.09 * c, 0.1 * c, '#2F333D', OUTLINE, 1);
+  circle(ctx, x - 0.8 * c, yb - 0.09 * c, 0.04 * c, '#A3A8B3');
+  circleO(ctx, x + 0.8 * c, yb - 0.09 * c, 0.1 * c, '#2F333D', OUTLINE, 1);
+  circle(ctx, x + 0.8 * c, yb - 0.09 * c, 0.04 * c, '#A3A8B3');
+}
+
+// ---------------------------------------------------------------- build plots
+
+/** DESIGN 17: free plots as dashed "Build here" outlines with a plus; the next room's plot is bold and amber, the rest faint. */
+function paintPlots(p: Painter, l: Layout, plots: Plot[]): void {
+  const ctx = p.ctx;
+  const c = l.cell;
+  const inset = 0.08 * c;
+  const rad = c * 0.14;
+  ctx.setLineDash(p.plotDash);
+  ctx.lineCap = 'round';
+  for (let i = 0; i < plots.length; i++) {
+    const pl = plots[i];
+    const r = pl.rect;
+    const x = r.x + inset;
+    const y = r.y + inset;
+    const w = r.w - 2 * inset;
+    const h = r.h - 2 * inset;
+    if (pl.next) {
+      fillRR(ctx, x, y, w, h, rad, PLOT_FILL);
+      strokeRR(ctx, x, y, w, h, rad, P.BUILD_AMBER, Math.max(1.5, c * 0.05));
+    } else {
+      strokeRR(ctx, x, y, w, h, rad, PLOT_FAINT, Math.max(1, c * 0.03));
+    }
+  }
+  ctx.setLineDash(p.noDash);
+  for (let i = 0; i < plots.length; i++) {
+    const pl = plots[i];
+    const r = pl.rect;
+    const cx = r.x + r.w / 2;
+    const plus = pl.next ? 0.17 * c : 0.11 * c;
+    ctx.font = p.fontPlot;
+    if (p.plotTextW < 0) p.plotTextW = ctx.measureText('Build here').width;
+    const withText = pl.next && p.plotTextW + 0.3 * c <= r.w - 2 * inset;
+    const cy = r.y + r.h / 2 - (withText ? 0.12 * c : 0);
+    ctx.beginPath();
+    ctx.moveTo(cx - plus, cy);
+    ctx.lineTo(cx + plus, cy);
+    ctx.moveTo(cx, cy - plus);
+    ctx.lineTo(cx, cy + plus);
+    ctx.strokeStyle = pl.next ? P.BUILD_AMBER : PLOT_FAINT;
+    ctx.lineWidth = pl.next ? Math.max(2.5, c * 0.09) : Math.max(1.5, c * 0.05);
+    ctx.stroke();
+    if (withText) {
+      ctx.fillStyle = PLOT_TEXT;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Build here', cx, cy + plus + 0.18 * c);
+    }
+  }
+}
+
 // ---------------------------------------------------------------- rooms
 
 function paintRoom(p: Painter, l: Layout, scene: Scene, v: RoomView, crowd: Crowd, info: FrameInfo): void {
@@ -472,6 +713,8 @@ function paintRoom(p: Painter, l: Layout, scene: Scene, v: RoomView, crowd: Crow
   const rad = c * 0.16;
   const sideW = SIDE_WALL * c;
   const backH = BACK_WALL * c;
+  // DESIGN 0: the second floor is the glass storey, its walls translucent
+  const glass = v.room.floor === 1;
 
   // DESIGN 3: a rounded pastel room with short extruded walls and a soft drop shadow
   shadowRR(ctx, r.x, r.y, r.w, r.h, rad, P.ROOM_FLOOR[k], c * 0.45, c * 0.16, 'rgba(25,30,60,0.22)');
@@ -488,26 +731,50 @@ function paintRoom(p: Painter, l: Layout, scene: Scene, v: RoomView, crowd: Crow
     ctx.lineTo(r.x + r.w - sideW, yy);
   }
   ctx.stroke();
-  // side walls: thin darker strips with a hairline on their inner edge
-  ctx.fillStyle = P.ROOM_SIDE[k];
+  // DESIGN 17: the floor shades toward the back wall
+  const shadeH = BACK_SHADE_H * c;
+  for (let i = 0; i < BACK_SHADE.length; i++) {
+    ctx.fillStyle = BACK_SHADE[i];
+    ctx.fillRect(r.x, r.y + backH + i * shadeH, r.w, shadeH);
+  }
+  // side walls: thin strips with a hairline on their inner edge
+  ctx.fillStyle = glass ? P.GLASS_WALL : P.ROOM_SIDE[k];
   ctx.fillRect(r.x, r.y, sideW, r.h);
   ctx.fillRect(r.x + r.w - sideW, r.y, sideW, r.h);
-  ctx.fillStyle = 'rgba(20,20,40,0.12)';
+  ctx.fillStyle = glass ? P.GLASS_EDGE : 'rgba(20,20,40,0.12)';
   ctx.fillRect(r.x + sideW - 1, r.y, 1, r.h);
   ctx.fillRect(r.x + r.w - sideW, r.y, 1, r.h);
-  // back wall: a lighter tint, a thin darker top edge, a shadow thrown onto the floor
-  ctx.fillStyle = P.ROOM_BACK[k];
+  // back wall, then its window, then the lighter top band (the wall's top surface, DESIGN 17)
+  ctx.fillStyle = glass ? P.GLASS_WALL : P.ROOM_BACK[k];
   ctx.fillRect(r.x, r.y, r.w, backH);
-  if (k === 'garage') paintRollupDoor(ctx, c, r, sideW, backH);
-  ctx.fillStyle = P.ROOM_TOP[k];
-  ctx.fillRect(r.x, r.y, r.w, Math.max(1.5, c * 0.045));
-  ctx.fillStyle = 'rgba(20,20,40,0.1)';
-  ctx.fillRect(r.x, r.y + backH, r.w, c * 0.05);
-  ctx.fillStyle = 'rgba(20,20,40,0.05)';
-  ctx.fillRect(r.x, r.y + backH + c * 0.05, r.w, c * 0.05);
+  if (glass) {
+    ctx.fillStyle = P.GLASS_SHEEN;
+    ctx.beginPath();
+    ctx.moveTo(r.x + r.w * 0.2, r.y);
+    ctx.lineTo(r.x + r.w * 0.34, r.y);
+    ctx.lineTo(r.x + r.w * 0.22, r.y + backH);
+    ctx.lineTo(r.x + r.w * 0.08, r.y + backH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = P.GLASS_EDGE;
+    ctx.fillRect(r.x, r.y + backH - 1, r.w, 1);
+  } else if (k === 'garage') {
+    paintRollupDoor(ctx, c, r, sideW, backH);
+  } else {
+    paintWindow(ctx, c, r, sideW);
+  }
+  const bandH = Math.max(2, c * 0.06);
+  ctx.fillStyle = glass ? 'rgba(255,255,255,0.9)' : P.ROOM_TOP[k];
+  ctx.fillRect(r.x, r.y, r.w, bandH);
+  ctx.fillStyle = 'rgba(20,20,40,0.14)';
+  ctx.fillRect(r.x, r.y + bandH, r.w, 1);
+  ctx.fillStyle = glass ? 'rgba(255,255,255,0.7)' : P.ROOM_TOP[k];
+  ctx.fillRect(r.x, r.y, sideW, r.h * 0.5);
+  ctx.fillRect(r.x + r.w - sideW, r.y, sideW, r.h * 0.5);
   ctx.restore();
-  strokeRR(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, rad, P.ROOM_EDGE[k], 1);
+  strokeRR(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, rad, glass ? P.GLASS_EDGE : P.ROOM_EDGE[k], glass ? Math.max(1, c * 0.035) : 1);
 
+  if (v.lamp) paintLamp(ctx, c, v.lamp.x, v.lamp.y, info.time, v.seats.length);
   paintPlant(ctx, c, v.plant.x, v.plant.y);
   switch (k) {
     case 'product': paintRacks(ctx, c, v, scene, info.time); break;
@@ -526,11 +793,13 @@ function paintRoom(p: Painter, l: Layout, scene: Scene, v: RoomView, crowd: Crow
   const laptop = k === 'garage';
   for (let i = 0; i < n; i++) {
     const seat = i < v.seats.length ? v.seats[i] : null;
-    if (i < v.deskCount) paintChair(ctx, c, v.slots[i].x - 0.06 * c, v.slots[i].y + 0.06 * c);
-    if (seat && !walkingIn(crowd, seat.personId)) paintSeat(ctx, c, seat, info.time);
-    if (i < v.deskCount) paintDesk(ctx, c, v.slots[i].x, v.slots[i].y, laptop);
+    const sitting = seat !== null && !walkingIn(crowd, seat.personId);
+    if (i < v.deskCount) paintChair(p, c, v.slots[i].x - 0.06 * c, v.slots[i].y + 0.06 * c, !sitting);
+    if (seat && sitting) paintSeat(p, c, seat, info.time);
+    if (i < v.deskCount) paintDesk(p, c, v.slots[i].x, v.slots[i].y, laptop, info.time, i);
   }
-  paintLabel(p, c, v, k);
+  if (k === 'lobby') paintBrand(p, c, v, scene);
+  else paintLabel(p, c, v, k);
 }
 
 /** A hired person is still walking to the desk: the seat stays empty until they arrive. */
@@ -551,6 +820,49 @@ function paintRollupDoor(ctx: Ctx, c: number, r: Rect, sideW: number, backH: num
     ctx.fillRect(x, y, w, slat - 1);
   }
   fillRR(ctx, r.x + r.w / 2 - c * 0.08, r.y + backH - c * 0.1, c * 0.16, c * 0.05, c * 0.02, '#6E6760');
+}
+
+/** DESIGN 17: a window on the back wall, right of the label: frame, sky, a lighter top pane and a cross bar. */
+function paintWindow(ctx: Ctx, c: number, r: Rect, sideW: number): void {
+  const w = 0.38 * c;
+  const h = 0.2 * c;
+  const x = r.x + r.w - sideW - 0.46 * c;
+  const y = r.y + 0.09 * c;
+  fillRR(ctx, x - 0.025 * c, y - 0.025 * c, w + 0.05 * c, h + 0.05 * c, c * 0.025, P.WINDOW_FRAME);
+  fillRR(ctx, x, y, w, h, c * 0.015, P.SKY);
+  ctx.fillStyle = P.SKY_LIGHT;
+  ctx.fillRect(x, y, w, h * 0.45);
+  ctx.fillStyle = P.WINDOW_FRAME;
+  ctx.fillRect(x + w / 2 - 0.012 * c, y, 0.024 * c, h);
+  ctx.fillRect(x, y + h * 0.45, w, 0.02 * c);
+  ctx.fillStyle = 'rgba(20,20,40,0.1)';
+  ctx.fillRect(x - 0.025 * c, y + h + 0.025 * c, w + 0.05 * c, 1);
+}
+
+/** DESIGN 17: a floor lamp with a warm pool of light on the floor; it flickers on faintly while people are in. */
+function paintLamp(ctx: Ctx, c: number, x: number, y: number, time: number, people: number): void {
+  const hgt = 0.44 * c;
+  const glow = people > 0 ? 1 : 0.55;
+  ellipse(ctx, x, y + 0.03 * c, 0.26 * c * glow, 0.09 * c * glow, P.LAMP_LIGHT);
+  ellipse(ctx, x, y, 0.08 * c, 0.03 * c, P.LAMP_POLE);
+  line(ctx, x, y, x, y - hgt, P.LAMP_POLE, Math.max(1, c * 0.03));
+  ctx.beginPath();
+  ctx.moveTo(x - 0.07 * c, y - hgt - 0.14 * c);
+  ctx.lineTo(x + 0.07 * c, y - hgt - 0.14 * c);
+  ctx.lineTo(x + 0.11 * c, y - hgt + 0.02 * c);
+  ctx.lineTo(x - 0.11 * c, y - hgt + 0.02 * c);
+  ctx.closePath();
+  ctx.fillStyle = P.LAMP_SHADE;
+  ctx.fill();
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  if (people > 0) {
+    const flicker = 0.75 + 0.25 * Math.sin(time * 3.1 + x);
+    ctx.globalAlpha = flicker;
+    ellipse(ctx, x, y - hgt + 0.03 * c, 0.09 * c, 0.035 * c, P.LAMP_BULB);
+    ctx.globalAlpha = 1;
+  }
 }
 
 function paintPlant(ctx: Ctx, c: number, x: number, y: number): void {
@@ -712,8 +1024,8 @@ function paintLobby(p: Painter, c: number, scene: Scene, info: FrameInfo): void 
     const ph = 0.026 * c;
     ctx.fillStyle = '#FFFFFF';
     for (let i = 0; i < papers; i++) ctx.fillRect(px, tr.y + tr.h - 0.06 * c - i * 0.028 * c, pw, ph);
-    ctx.fillStyle = 'rgba(40,50,80,0.12)';
-    for (let i = 0; i < papers; i++) ctx.fillRect(px, tr.y + tr.h - 0.06 * c - i * 0.028 * c, pw, 1);
+    ctx.fillStyle = P.LINE_BLUE;
+    for (let i = 0; i < papers; i++) ctx.fillRect(px + 0.03 * c, tr.y + tr.h - 0.06 * c - i * 0.028 * c + 1, pw * 0.5, 1);
   }
 
   if (scene.coffee) paintCoffee(ctx, c, lb.coffee.x, lb.coffee.y);
@@ -735,7 +1047,8 @@ function paintSign(p: Painter, l: Layout, scene: Scene, info: FrameInfo): void {
     p.signAr = info.ar;
     p.signW = ctx.measureText(p.signText).width;
   }
-  const sh = Math.max(0.28 * c, p.signFontPx * 1.8);
+  // low enough to clear the brand plaque on the back wall, high enough to point down at the tray
+  const sh = Math.max(0.26 * c, p.signFontPx * 1.5);
   const sw = p.signW + Math.max(0.3 * c, 10);
   let sx = lb.sign.x - sw;
   sx = Math.max(l.x0 + 2, Math.min(sx, l.x0 + l.lotW - sw - 2));
@@ -791,6 +1104,11 @@ function paintGarage(ctx: Ctx, c: number, v: RoomView, scene: Scene): void {
   ctx.lineTo(wx + 0.36 * c, wy - 0.22 * c);
   ctx.stroke();
   fillRR(ctx, wx + 0.12 * c, wy - 0.26 * c, 0.14 * c, 0.05 * c, c * 0.02, '#2F3340');
+  // a bare bulb on a cord from the ceiling
+  const bxl = r.x + r.w - SIDE_WALL * c - 0.5 * c;
+  line(ctx, bxl, r.y + 0.02 * c, bxl, r.y + 0.2 * c, '#4A4F5A', Math.max(1, c * 0.02));
+  ellipse(ctx, bxl, r.y + 0.3 * c, 0.14 * c, 0.05 * c, P.LAMP_LIGHT);
+  circleO(ctx, bxl, r.y + 0.25 * c, 0.045 * c, P.LAMP_BULB, OUTLINE, 1);
   if (scene.coffee && !scene.hasLobby) paintCoffee(ctx, c, r.x + r.w / 2, r.y + r.h - 0.62 * c);
 }
 
@@ -799,6 +1117,7 @@ function paintDemo(ctx: Ctx, c: number, v: RoomView, backH: number): void {
   const cx = r.x + r.w / 2;
   const sy = r.y + backH + 0.08 * c;
   shadowRR(ctx, cx - 0.5 * c, sy, 1.0 * c, 0.42 * c, c * 0.04, SCREEN_DARK, c * 0.1, c * 0.03, 'rgba(30,30,60,0.2)');
+  fillRR(ctx, cx - 0.56 * c, sy - 0.04 * c, 1.12 * c, 0.5 * c, c * 0.06, SCREEN_GLOW);
   fillRR(ctx, cx - 0.46 * c, sy + 0.04 * c, 0.92 * c, 0.34 * c, c * 0.03, '#9EC3F5');
   ctx.fillStyle = '#FFFFFF';
   ctx.beginPath();
@@ -814,40 +1133,78 @@ function paintDemo(ctx: Ctx, c: number, v: RoomView, backH: number): void {
   }
 }
 
-/** An office chair back, drawn behind the figure so it peeks out beside the shoulders. */
-function paintChair(ctx: Ctx, c: number, x: number, feet: number): void {
+// ---------------------------------------------------------------- furniture and seats (sprites)
+
+/** An office chair: the back peeks out beside the shoulders; an empty chair also shows its seat. */
+function paintChairShape(ctx: Ctx, c: number, x: number, feet: number, empty: boolean): void {
   fillStrokeRR(ctx, x - 0.16 * c, feet - 0.37 * c, 0.32 * c, 0.25 * c, c * 0.09, CHAIR, OUTLINE, 1);
   fillRR(ctx, x - 0.12 * c, feet - 0.34 * c, 0.24 * c, 0.15 * c, c * 0.06, CHAIR_PAD);
+  if (empty) {
+    fillStrokeRR(ctx, x - 0.15 * c, feet - 0.17 * c, 0.3 * c, 0.12 * c, c * 0.05, CHAIR_PAD, OUTLINE, 1);
+    ctx.fillStyle = CHAIR;
+    ctx.fillRect(x - 0.015 * c, feet - 0.06 * c, 0.03 * c, 0.05 * c);
+    ellipse(ctx, x, feet - 0.005 * c, 0.1 * c, 0.03 * c, CHAIR);
+  }
 }
 
-/** A rounded desk with a slim monitor (or an open laptop in the garage). */
-function paintDesk(ctx: Ctx, c: number, x: number, y: number, laptop: boolean): void {
+function paintChair(p: Painter, c: number, x: number, feet: number, empty: boolean): void {
+  const s = getSprite(p.sprites, empty ? CHAIR_KEY_EMPTY : CHAIR_KEY_BACK, CHAIR_BOX_W * c, CHAIR_BOX_H * c, CHAIR_BOX_W * c / 2, CHAIR_BOX_OY * c, p.drawChair, empty);
+  if (s) drawSprite(p.ctx, s, x, feet);
+  else paintChairShape(p.ctx, c, x, feet, empty);
+}
+
+/** A rounded desk with a slim glowing monitor (or an open laptop in the garage); (x, y) is the desk centre. */
+function paintDeskShape(ctx: Ctx, c: number, x: number, y: number, laptop: boolean): void {
   const w = 0.56 * c;
   const h = 0.22 * c;
   fillRR(ctx, x - w / 2 + c * 0.012, y - h / 2 + c * 0.04, w, h, c * 0.06, 'rgba(30,30,60,0.16)');
   fillStrokeRR(ctx, x - w / 2, y - h / 2, w, h, c * 0.06, DESK_TOP, 'rgba(90,60,30,0.3)', 1);
   fillRR(ctx, x - w / 2 + 1, y - h / 2 + 1, w - 2, h * 0.42, c * 0.06, 'rgba(255,255,255,0.28)');
   if (laptop) {
+    fillRR(ctx, x - 0.05 * c, y - 0.245 * c, 0.26 * c, 0.21 * c, c * 0.04, SCREEN_GLOW);
     fillRR(ctx, x - 0.02 * c, y - 0.08 * c, 0.2 * c, 0.035 * c, c * 0.01, '#6B7280');
     fillRR(ctx, x - 0.01 * c, y - 0.21 * c, 0.18 * c, 0.135 * c, c * 0.015, SCREEN_DARK);
     fillRR(ctx, x + 0.005 * c, y - 0.195 * c, 0.15 * c, 0.1 * c, c * 0.01, SCREEN_LIT);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(x + 0.02 * c, y - 0.18 * c, 0.06 * c, 0.015 * c);
+    ctx.fillRect(x + 0.02 * c, y - 0.15 * c, 0.09 * c, 0.015 * c);
     return;
   }
   const mw = 0.2 * c;
   const mh = 0.13 * c;
   const mx = x + 0.1 * c - mw / 2;
   const my = y - h / 2 - mh + c * 0.03;
+  fillRR(ctx, mx - 0.04 * c, my - 0.04 * c, mw + 0.08 * c, mh + 0.1 * c, c * 0.04, SCREEN_GLOW);
   ctx.fillStyle = '#596070';
   ctx.fillRect(mx + mw / 2 - c * 0.02, my + mh - c * 0.01, c * 0.04, c * 0.04);
   ctx.fillRect(mx + mw / 2 - c * 0.05, my + mh + c * 0.025, c * 0.1, c * 0.012);
   fillRR(ctx, mx, my, mw, mh, c * 0.02, SCREEN_DARK);
   fillRR(ctx, mx + c * 0.015, my + c * 0.015, mw - c * 0.03, mh - c * 0.03, c * 0.01, SCREEN_LIT);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillRect(mx + c * 0.03, my + c * 0.03, mw * 0.4, c * 0.015);
+  ctx.fillRect(mx + c * 0.03, my + c * 0.06, mw * 0.6, c * 0.015);
 }
 
-function paintSeat(ctx: Ctx, c: number, s: SeatInfo, time: number): void {
-  const bob = Math.sin(time * 2.2 + s.phase) * 0.012 * c;
-  drawFigure(ctx, s.x, s.y, SEAT_H * c, P.DEPT[s.role], P.SKIN[s.skin], P.HAIR[s.hair], bob, 0, true, 1, 1);
-  if (s.founder) circleO(ctx, s.x + 0.08 * c, s.y - 0.2 * c + bob, 0.035 * c, P.GOLD, 'rgba(90,60,0,0.6)', 1);
+/** The desk sprite, then the screen's pulse: a translucent pane whose alpha breathes, keyed per desk so screens do not blink together. */
+function paintDesk(p: Painter, c: number, x: number, y: number, laptop: boolean, time: number, i: number): void {
+  const ctx = p.ctx;
+  const s = getSprite(p.sprites, laptop ? DESK_KEY_LAPTOP : DESK_KEY_MONITOR, DESK_BOX_W * c, DESK_BOX_H * c, DESK_BOX_W * c / 2, DESK_BOX_OY * c, p.drawDesk, laptop);
+  if (s) drawSprite(ctx, s, x, y);
+  else paintDeskShape(ctx, c, x, y, laptop);
+  ctx.globalAlpha = 0.12 + 0.12 * Math.sin(time * 1.7 + i * 1.3 + x * 0.05);
+  ctx.fillStyle = SCREEN_PULSE;
+  if (laptop) ctx.fillRect(x + 0.005 * c, y - 0.195 * c, 0.15 * c, 0.1 * c);
+  else ctx.fillRect(x + 0.015 * c, y - 0.195 * c, 0.17 * c, 0.1 * c);
+  ctx.globalAlpha = 1;
+}
+
+function paintSeat(p: Painter, c: number, seat: SeatInfo, time: number): void {
+  const ctx = p.ctx;
+  const bob = Math.sin(time * 2.2 + seat.phase) * 0.012 * c;
+  const s = getSprite(p.sprites, SEAT_KEY + seat.key, SEAT_BOX_W * c, SEAT_BOX_H * c, SEAT_BOX_W * c / 2, SEAT_BOX_OY * c, p.drawSeat, seat);
+  if (s) drawSprite(ctx, s, seat.x, seat.y + bob);
+  else drawFigure(ctx, seat.x, seat.y, SEAT_H * c, seat.look, bob, -1, true, 1, 1);
+  if (seat.founder) circleO(ctx, seat.x + 0.08 * c, seat.y - 0.2 * c + bob, 0.035 * c, P.GOLD, 'rgba(90,60,0,0.6)', 1);
 }
 
 /** The room's name on a glassy pill with its glyph, hung on the back wall. */
@@ -860,7 +1217,8 @@ function paintLabel(p: Painter, c: number, v: RoomView, k: RoomView['room']['kin
   const gap = c * 0.06;
   const h = c * 0.28;
   let w = padX * 2 + gs + gap + v.labelW;
-  const withText = w <= v.rect.w - c * 0.12;
+  // the name only when it fits and the cell is big enough for the 10px floor not to dwarf the room (two floors)
+  const withText = c >= LABEL_TEXT_MIN_CELL && w <= v.rect.w - c * 0.12;
   if (!withText) w = h;
   const x = v.rect.x + v.rect.w / 2 - w / 2;
   const y = v.rect.y + c * 0.035;
@@ -875,6 +1233,42 @@ function paintLabel(p: Painter, c: number, v: RoomView, k: RoomView['room']['kin
     ctx.fillText(v.label, x + padX + gs + gap, y + h / 2 + 0.5);
   } else {
     drawGlyph(ctx, k, x + w / 2, y + h / 2, gs, P.ROOM_BASE[k]);
+  }
+}
+
+/** DESIGN 17: the company's plaque on the lobby's back wall: the four-square logo and the name on white with a dark border. */
+function paintBrand(p: Painter, c: number, v: RoomView, scene: Scene): void {
+  const ctx = p.ctx;
+  ctx.font = p.fontBrand;
+  if (p.brandW < 0 || p.brandText !== scene.companyName) {
+    p.brandText = scene.companyName;
+    p.brandW = ctx.measureText(p.brandText).width;
+  }
+  const sq = c * 0.075;
+  const logo = sq * 2 + c * 0.015;
+  const padX = c * 0.09;
+  const gap = c * 0.06;
+  const h = c * 0.28;
+  let w = padX * 2 + logo + gap + p.brandW;
+  const withText = c >= LABEL_TEXT_MIN_CELL && w <= v.rect.w - c * 0.1;
+  if (!withText) w = padX * 2 + logo;
+  const x = v.rect.x + v.rect.w / 2 - w / 2;
+  const y = v.rect.y + c * 0.035;
+  const border = Math.max(1, c * 0.025);
+  shadowRR(ctx, x, y, w, h, c * 0.05, BRAND_PLAQUE, c * 0.08, c * 0.02, 'rgba(30,30,60,0.2)');
+  strokeRR(ctx, x, y, w, h, c * 0.05, P.INK, border);
+  const lx = x + padX;
+  const ly = y + h / 2 - logo / 2;
+  for (let i = 0; i < 4; i++) {
+    const col = i & 1;
+    const row = i >> 1;
+    fillRR(ctx, lx + col * (sq + c * 0.015), ly + row * (sq + c * 0.015), sq, sq, c * 0.015, P.LOGO[i]);
+  }
+  if (withText) {
+    ctx.fillStyle = P.INK;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(p.brandText, lx + logo + gap, y + h / 2 + 0.5);
   }
 }
 
@@ -902,21 +1296,19 @@ function paintWalkers(p: Painter, l: Layout, crowd: Crowd): void {
   for (let i = 0; i < crowd.walkers.length; i++) {
     const w: Walker = crowd.walkers[i];
     if (!w.active) continue;
-    const walk = w.moving ? w.dist / (0.09 * c) : 0;
-    const bob = w.moving ? -Math.abs(Math.sin(walk)) * 0.035 * c : Math.sin(w.age * 2.5 + w.phase) * 0.012 * c;
+    const frame = walkFrame(w, c);
+    // the body rides a little higher on the passing frames, and idles with a slow breath
+    const bob = frame >= 0 ? (frame & 1 ? -0.03 * c : 0) : Math.sin(w.age * 2.5 + w.phase) * 0.012 * c;
     let alpha = w.alpha;
     if (w.kind === 'churn' && w.age < 0.4) alpha *= w.age / 0.4;
-    drawFigure(ctx, w.x, w.y, h, w.body, P.SKIN[w.skin], P.HAIR[w.hair], bob, walk, false, alpha, w.dir);
-    if (w.kind === 'enterprise' || w.kind === 'waiting') {
-      fillStrokeRR(ctx, w.x + w.dir * 0.17 * c - 0.07 * c, w.y - 0.24 * c + bob, 0.14 * c, 0.11 * c, c * 0.02, '#3B3F4A', OUTLINE, 1);
-    }
+    drawFigure(ctx, w.x, w.y, h, w.look, bob, frame, false, alpha, w.dir);
     if (w.badge > 1) {
       ctx.font = p.fontBadge;
       if (w.badgeW < 0) w.badgeW = ctx.measureText(w.badgeText).width;
       const bw = w.badgeW + 0.14 * c;
       const bh = 0.2 * c;
       const bx = w.x - bw / 2;
-      const by = w.y - h - 0.26 * c + bob;
+      const by = w.y - h - 0.3 * c + bob;
       fillStrokeRR(ctx, bx, by, bw, bh, bh / 2, 'rgba(255,255,255,0.92)', OUTLINE, 1);
       ctx.fillStyle = P.INK;
       ctx.textAlign = 'center';
@@ -988,32 +1380,43 @@ function paintEffects(p: Painter, l: Layout, crowd: Crowd): void {
   }
 }
 
-/** A gold coin and a bold "+$X" with a dark outline, rising and fading. */
+/** DESIGN 17: a green pill with a coin icon and "+$X" in white, popping, rising and fading. */
 function paintCoin(p: Painter, c: number, e: Effect, pr: number): void {
   const ctx = p.ctx;
   const y = e.y - easeOutCubic(pr) * 0.75 * c;
-  const scale = 1 + 0.3 * Math.sin(Math.min(1, pr * 3) * Math.PI);
+  const scale = 1 + 0.18 * Math.sin(Math.min(1, pr * 3) * Math.PI);
   ctx.globalAlpha = pr < 0.65 ? 1 : 1 - (pr - 0.65) / 0.35;
   ctx.font = p.fontCoin;
   if (e.textW < 0) e.textW = ctx.measureText(e.text).width;
-  const cw = 0.2 * c;
-  const total = cw + 0.06 * c + e.textW;
-  const x = e.x - total / 2;
-  const cr = (cw / 2) * scale;
-  circleO(ctx, x + cw / 2, y, cr, P.GOLD, 'rgba(90,60,0,0.65)', Math.max(1, c * 0.02));
-  circle(ctx, x + cw / 2, y, cr * 0.58, '#FFD866');
-  ctx.lineWidth = Math.max(2, c * 0.05);
-  ctx.strokeStyle = 'rgba(35,30,15,0.85)';
-  ctx.lineJoin = 'round';
+  const ph = Math.max(0.3 * c, p.coinFontPx * 1.45) * scale;
+  const cr = ph * 0.34;
+  const padX = ph * 0.3;
+  const gap = ph * 0.18;
+  const pw = padX * 2 + cr * 2 + gap + e.textW * scale;
+  const x = e.x - pw / 2;
+  shadowRR(ctx, x, y - ph / 2, pw, ph, ph / 2, P.MONEY_GREEN, c * 0.12, c * 0.03, 'rgba(20,80,40,0.3)');
+  strokeRR(ctx, x + 0.5, y - ph / 2 + 0.5, pw - 1, ph - 1, ph / 2, P.MONEY_GREEN_DARK, Math.max(1, c * 0.025));
+  const cx = x + padX + cr;
+  circle(ctx, cx, y, cr, '#FFFFFF');
+  ring(ctx, cx, y, cr * 0.72, P.MONEY_GREEN, Math.max(1, cr * 0.16));
+  ctx.fillStyle = P.MONEY_GREEN_DARK;
+  ctx.fillRect(cx - cr * 0.07, y - cr * 0.42, cr * 0.14, cr * 0.84);
+  ctx.fillStyle = '#FFFFFF';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.strokeText(e.text, x + cw + 0.06 * c, y);
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillText(e.text, x + cw + 0.06 * c, y);
+  if (scale !== 1) {
+    ctx.save();
+    ctx.translate(cx + cr + gap, y);
+    ctx.scale(scale, scale);
+    ctx.fillText(e.text, 0, 0.5);
+    ctx.restore();
+  } else {
+    ctx.fillText(e.text, cx + cr + gap, y + 0.5);
+  }
   ctx.globalAlpha = 1;
 }
 
-/** An invoice slip: a small white sheet with a few lines, flying along an arc to the tray. */
+/** An invoice slip: a small white sheet with a blue line and a couple of grey ones, flying along an arc to the tray (DESIGN 17). */
 function paintSlip(ctx: Ctx, c: number, e: Effect, pr: number): void {
   const k = easeInOutQuad(pr);
   const mx = (e.x + e.x2) / 2;
@@ -1027,11 +1430,12 @@ function paintSlip(ctx: Ctx, c: number, e: Effect, pr: number): void {
   ctx.rotate(rot);
   fillRR(ctx, -0.09 * c, -0.11 * c, 0.2 * c, 0.26 * c, c * 0.01, 'rgba(0,0,0,0.12)');
   fillStrokeRR(ctx, -0.1 * c, -0.13 * c, 0.2 * c, 0.26 * c, c * 0.01, '#FFFFFF', OUTLINE, 1);
-  ctx.fillStyle = 'rgba(60,70,90,0.5)';
-  ctx.fillRect(-0.06 * c, -0.07 * c, 0.12 * c, 0.016 * c);
-  ctx.fillRect(-0.06 * c, -0.03 * c, 0.12 * c, 0.016 * c);
-  ctx.fillRect(-0.06 * c, 0.01 * c, 0.08 * c, 0.016 * c);
-  circle(ctx, 0.04 * c, 0.07 * c, 0.025 * c, P.GOLD);
+  ctx.fillStyle = P.LINE_BLUE;
+  ctx.fillRect(-0.07 * c, -0.085 * c, 0.14 * c, 0.028 * c);
+  ctx.fillStyle = 'rgba(60,70,90,0.35)';
+  ctx.fillRect(-0.07 * c, -0.02 * c, 0.14 * c, 0.016 * c);
+  ctx.fillRect(-0.07 * c, 0.02 * c, 0.1 * c, 0.016 * c);
+  ctx.fillRect(-0.07 * c, 0.06 * c, 0.12 * c, 0.016 * c);
   ctx.rotate(-rot);
   ctx.translate(-x, -y);
   ctx.globalAlpha = 1;

@@ -7,7 +7,9 @@
  * dt, independent of the sim speed.
  */
 import type { Layout } from './layout';
-import { HAIR, SKIN } from './palette';
+import { HAIR, SKIN, TROUSERS } from './palette';
+import { CARRY_NONE, HAIR_STYLES, OUTFITS, WALK_FRAMES } from './primitives';
+import type { Carry, Look } from './primitives';
 import { formatMoney, hash01 } from './util';
 
 export type WalkerKind = 'smb' | 'enterprise' | 'left' | 'waiting' | 'churn' | 'hire' | 'leave';
@@ -53,6 +55,8 @@ export interface Walker {
   body: string;
   skin: number;
   hair: number;
+  /** the figure's look (body colour, skin, hair, outfit, hairstyle, what it carries); one object per slot, set at spawn */
+  look: Look;
   alpha: number;
   coinAmount: number;
 }
@@ -92,6 +96,8 @@ export interface Crowd {
 
 /** steady walking speed in cells per second (px/s = × cell) */
 export const WALK_CELLS_PER_SEC = 1.5;
+/** distance one walk cycle (WALK_FRAMES frames) covers, in cells */
+export const WALK_CYCLE_CELLS = 0.8;
 export const EFFECT_POOL = 48;
 /** seconds within which coin popups of the same source and day merge into one */
 export const COIN_MERGE_WINDOW = 0.5;
@@ -111,7 +117,9 @@ function blankWalker(): Walker {
   return {
     active: false, kind: 'smb', x: 0, y: 0, path: [], idx: 0, waitLeft: 0, speed: 0,
     badge: 1, badgeText: '', badgeW: -1, age: 0, phase: 0, dist: 0, moving: false, dir: 1,
-    personId: null, body: '#000', skin: 0, hair: 0, alpha: 1, coinAmount: 0,
+    personId: null, body: '#000', skin: 0, hair: 0,
+    look: { body: '#000', skin: SKIN[0], hair: HAIR[0], trousers: TROUSERS[0], outfit: 0, style: 0, carry: CARRY_NONE },
+    alpha: 1, coinAmount: 0,
   };
 }
 
@@ -152,6 +160,12 @@ export function findWalker(crowd: Crowd, kind: WalkerKind): Walker | null {
   return null;
 }
 
+/** The walk-cycle frame of a walker (0..WALK_FRAMES−1 from the distance walked), or −1 when it stands. */
+export function walkFrame(w: Walker, cell: number): number {
+  if (!w.moving || !(cell > 0)) return -1;
+  return Math.floor((w.dist / (WALK_CYCLE_CELLS * cell)) * WALK_FRAMES) % WALK_FRAMES;
+}
+
 /** Sum of badges: how many figures the crowd stands for. */
 export function representedWalkers(crowd: Crowd): number {
   let n = 0;
@@ -164,6 +178,11 @@ export interface SpawnOpts {
   personId?: string | null;
   skin?: number;
   hair?: number;
+  /** outfit, hairstyle and trousers indices; hashed from the spawn counter when omitted */
+  outfit?: number;
+  style?: number;
+  trousers?: number;
+  carry?: Carry;
   alpha?: number;
   coinAmount?: number;
 }
@@ -219,6 +238,15 @@ export function spawnWalker(crowd: Crowd, kind: WalkerKind, path: Waypoint[], op
   slot.body = opts.body;
   slot.skin = opts.skin ?? Math.floor(hash01(seed, 1) * SKIN.length);
   slot.hair = opts.hair ?? Math.floor(hash01(seed, 2) * HAIR.length);
+  const look = slot.look;
+  look.body = opts.body;
+  look.skin = SKIN[slot.skin];
+  look.hair = HAIR[slot.hair];
+  const trousers = opts.trousers ?? -1;
+  look.trousers = TROUSERS[trousers >= 0 && trousers < TROUSERS.length ? trousers : Math.floor(hash01(seed, 6) * TROUSERS.length)];
+  look.outfit = opts.outfit ?? Math.floor(hash01(seed, 4) * OUTFITS);
+  look.style = opts.style ?? Math.floor(hash01(seed, 5) * HAIR_STYLES);
+  look.carry = opts.carry ?? CARRY_NONE;
   slot.alpha = opts.alpha ?? 1;
   slot.coinAmount = opts.coinAmount ?? 0;
   crowd.spawned += 1;
@@ -233,7 +261,11 @@ export function retargetWalker(w: Walker, kind: WalkerKind, path: Waypoint[], op
   w.idx = 0;
   w.waitLeft = 0;
   w.moving = false;
-  if (opts.body) w.body = opts.body;
+  if (opts.body) {
+    w.body = opts.body;
+    w.look.body = opts.body;
+  }
+  if (opts.carry !== undefined) w.look.carry = opts.carry;
   if (opts.alpha !== undefined) w.alpha = opts.alpha;
   if (opts.coinAmount !== undefined) w.coinAmount = opts.coinAmount;
   if (opts.personId !== undefined) w.personId = opts.personId;

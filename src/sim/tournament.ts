@@ -38,19 +38,42 @@ function roomWithDeskSpaceFor(state: GameState, role: Role): boolean {
   return assets.roomsWithDeskSpace(state).some((r) => S.roomAcceptsRole(r, role));
 }
 
-/** Monthly rent a hire into this role would add today (a new small room when no room has a free desk or desk space). */
+/** Would this hire need a new room: no free desk for the role and no desk space in the garage or the department's rooms. */
+function needsRoom(state: GameState, role: Role): boolean {
+  return !S.seatFor(state, role) && !roomWithDeskSpaceFor(state, role);
+}
+
+/** Monthly rent a hire into this role would add today (a new room of RULES.roomSize when no room has a free desk or desk space). */
 export function roomRentForHire(state: GameState, role: Role): number {
-  if (S.seatFor(state, role)) return 0;
-  if (roomWithDeskSpaceFor(state, role)) return 0;
-  return rooms.roomRent(role, 'small');
+  return needsRoom(state, role) ? rooms.roomRent(role, RULES.roomSize) : 0;
+}
+
+/**
+ * DESIGN.md 0 "Space (v2)": the one-off price of the second floor when this hire would be the one
+ * to build it (the ground floor is full and RULES.upstairs is on), else 0.
+ */
+export function upstairsCostForHire(state: GameState, role: Role): number {
+  if (!needsRoom(state, role)) return 0;
+  return rooms.wouldBuildUpstairs(state, role) ? CONFIG.assets.catalogue.secondFloor.price : 0;
+}
+
+/** Everything a hire into this role would cost beyond the salary, for the board's caption. */
+export function hireCosts(state: GameState, role: Role): { setup: number; rent: number; upstairs: number } {
+  return { setup: setupCost(state, role), rent: roomRentForHire(state, role), upstairs: upstairsCostForHire(state, role) };
 }
 
 export function canHireRole(state: GameState, role: Role): Verdict {
   if (!RULES.roles.includes(role)) return no('Not in this game.');
   const spec = RULES.hire[role];
-  const needed = spec.salary + setupCost(state, role);
-  if (state.cash < needed) return no(`Not enough cash: ${fmtMoney(needed)} for the first month and the setup.`);
-  if (!S.seatFor(state, role) && !roomWithDeskSpaceFor(state, role) && !rooms.autoSpot(state, role)) {
+  const { setup, upstairs } = hireCosts(state, role);
+  const needed = spec.salary + setup + upstairs;
+  if (state.cash < needed) {
+    return no(upstairs > 0
+      ? `Not enough cash: ${fmtMoney(needed)} for the first month, the setup and ${fmtMoney(upstairs)} to build upstairs.`
+      : `Not enough cash: ${fmtMoney(needed)} for the first month and the setup.`);
+  }
+  // DESIGN.md 0 "Space (v2)": the lot is only full once the second floor is too (or cannot be built)
+  if (needsRoom(state, role) && !rooms.autoSpot(state, role) && !rooms.wouldBuildUpstairs(state, role)) {
     return no('No space left on the lot.');
   }
   return OK;

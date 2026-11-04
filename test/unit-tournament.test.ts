@@ -10,9 +10,10 @@
  * call useFullEngine() themselves.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { CONFIG, EVENT_TYPES, RULES, advanceDay, advanceTo, canDispatch, createGame, dispatch, hintLine, ledger, replay, selectors as S } from '../src/sim';
+import { CONFIG, EVENT_TYPES, RULES, advanceDay, advanceTo, canDispatch, createGame, dispatch, hintLine, ledger, replay, selectors as S, validSpots } from '../src/sim';
 import type { Action, ActionRecord, Customer, EventType, GameState, Person, Role, RoomKind } from '../src/sim';
 import * as tournament from '../src/sim/tournament';
+import * as staffSim from '../src/sim/staff';
 import * as events from '../src/sim/events';
 import { openKnock } from '../src/sim/capital';
 import { computeValuation } from '../src/sim/valuation';
@@ -21,7 +22,15 @@ import { useFullEngine, useTournamentRules } from './setup';
 
 const D = CONFIG.time.daysPerMonth;
 const A = CONFIG.assets.catalogue;
+/** the rooms the tournament opens by itself (DESIGN.md 0 "Space (v2)"); the full engine's ensureSeat opens small ones */
+const LARGE = CONFIG.rooms.size.large;
 const SMALL = CONFIG.rooms.size.small;
+/** the lowest row a 3×2 room fits on: the bottom row only has a 2×2 gap beside the lobby, so it is the row above the garage, at the left */
+const FIRST_ROOM = { x: 0, y: CONFIG.grid.garage.y - LARGE.h } as const;
+/** large rooms per row, on the rows above the garage downstairs and on the whole grid upstairs */
+const ROOMS_PER_ROW = Math.floor(CONFIG.grid.w / LARGE.w);
+const GROUND_ROOMS = Math.floor(CONFIG.grid.garage.y / LARGE.h) * ROOMS_PER_ROW;
+const UPSTAIRS_ROOMS = Math.floor(CONFIG.grid.h / LARGE.h) * ROOMS_PER_ROW;
 const FAR = 1_000_000;
 /** the round: 30 game months (DESIGN.md 0) */
 const ROUND_MONTHS = 30;
@@ -72,7 +81,7 @@ function firstDifference(a: string, b: string): string {
 // ---------------------------------------------------------------- hireRole
 
 describe('hireRole (DESIGN 0: one fixed hire per department, auto-provisioned)', () => {
-  it('on day 0 the first engineer takes the garage\'s spare desk (desk and laptop as capex, no room, no rent); the second opens a small Product room on the lowest free row and the lobby, and the rent starts', () => {
+  it('on day 0 the first engineer takes the garage\'s spare desk (desk and laptop as capex, no room, no rent); the second opens a large Product room on the lowest row it fits and the lobby, and the rent starts', () => {
     const s = game();
     const spec = RULES.hire.product;
     expect(S.hasRoom(s, 'lobby')).toBe(false);
@@ -80,6 +89,7 @@ describe('hireRole (DESIGN 0: one fixed hire per department, auto-provisioned)',
     // (DESIGN.md 5/6: the garage seats anyone, so its spare desk comes before a room and its rent)
     expect(tournament.setupCost(s, 'product')).toBe(A.desk.price + A.laptop.price);
     expect(tournament.roomRentForHire(s, 'product')).toBe(0);
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup: A.desk.price + A.laptop.price, rent: 0, upstairs: 0 });
     expect(canDispatch(s, hire('product'))).toEqual({ ok: true });
 
     act(s, hire('product'));
@@ -109,16 +119,21 @@ describe('hireRole (DESIGN 0: one fixed hire per department, auto-provisioned)',
 
     // the garage is full: the second engineer needs a room, and the board can say so before the hire
     expect(tournament.setupCost(s, 'product')).toBe(A.desk.price + A.laptop.price);
-    expect(tournament.roomRentForHire(s, 'product')).toBe(SMALL.rent);
+    expect(tournament.roomRentForHire(s, 'product')).toBe(LARGE.rent);
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup: A.desk.price + A.laptop.price, rent: LARGE.rent, upstairs: 0 });
     expect(canDispatch(s, hire('product'))).toEqual({ ok: true });
 
     act(s, hire('product'));
 
     const [room] = roomsOf(s, 'product');
-    expect(room).toMatchObject({ size: 'small', floor: 0, w: SMALL.w, h: SMALL.h, rent: SMALL.rent, openedDay: 0 });
-    // DESIGN.md 5: the garage (0,6) and the lobby (2,6) hold the bottom row; the lowest free 2×2 spot is beside them
-    expect(room.y + room.h).toBe(CONFIG.grid.h);
-    expect(room.x).toBe(CONFIG.grid.lobby.x + CONFIG.grid.lobby.w);
+    // DESIGN.md 0 "Space (v2)": department rooms open large (six desks, $4.5k/mo)
+    expect(RULES.roomSize).toBe('large');
+    expect(room).toMatchObject({ size: 'large', floor: 0, w: LARGE.w, h: LARGE.h, rent: LARGE.rent, openedDay: 0 });
+    expect(S.roomMaxDesks(room)).toBe(LARGE.maxDesks);
+    // DESIGN.md 5: the garage (0,6) and the lobby (2,6) hold the bottom row and a 3×2 room does not fit in the gap beside
+    // them, so the lowest row it fits on is the one above the garage, at the left
+    expect(room).toMatchObject(FIRST_ROOM);
+    expect(room.y + room.h).toBe(CONFIG.grid.garage.y);
     expect(s.rooms.map((r) => r.kind).sort()).toEqual(['garage', 'lobby', 'product']);
     expect(roomsOf(s, 'lobby')[0].rent).toBe(0);
     expect(s.visuals.filter((v) => v.t === 'room' && v.op === 'open')).toHaveLength(2);
@@ -167,8 +182,9 @@ describe('hireRole (DESIGN 0: one fixed hire per department, auto-provisioned)',
       const [, q] = staff(s);
       expect(q).toMatchObject({ role, baseSalary: RULES.hire[role].salary, skill: RULES.hire[role].skill, archetype: RULES.hire[role].archetype });
       expect(roomsOf(s, role)).toHaveLength(1);
+      expect(roomsOf(s, role)[0].size).toBe('large');
       expect(q.roomId).toBe(roomsOf(s, role)[0].id);
-      expect(S.monthlyRent(s)).toBe(SMALL.rent);
+      expect(S.monthlyRent(s)).toBe(LARGE.rent);
     }
   });
 
@@ -184,30 +200,32 @@ describe('hireRole (DESIGN 0: one fixed hire per department, auto-provisioned)',
     expect(staff(s).every((p) => p.hasLaptop)).toBe(true);
     expect(S.laptopsOwned(s)).toBe(4);
     expect(s.book.cf.capex).toBe(3 * (A.desk.price + A.laptop.price));
-    expect(S.monthlyRent(s)).toBe(SMALL.rent);
+    expect(S.monthlyRent(s)).toBe(LARGE.rent);
   });
 
-  it('a sixth engineer opens a second room on the next lowest free row (the garage seats one, the first room four)', () => {
+  it('the seventh hire of a department opens a second large room beside the first on the same row (the first seats six; the garage went to another department)', () => {
     const s = game();
-    // DESIGN.md 5: the garage's spare desk first, then the small room fills its four desks
-    const seatsBeforeSecondRoom = CONFIG.rooms.garage.maxDesks - 1 + SMALL.maxDesks;
-    for (let i = 0; i < seatsBeforeSecondRoom; i++) act(s, hire('product'));
+    act(s, hire('marketing')); // the garage's spare desk goes to Marketing: no Marketing room
+    // DESIGN.md 0 "Space (v2)": the large room fills its six desks before a second one opens
+    for (let i = 0; i < LARGE.maxDesks; i++) act(s, hire('product'));
     const [first] = roomsOf(s, 'product');
     expect(roomsOf(s, 'product')).toHaveLength(1);
-    expect(S.desksIn(s, first.id)).toHaveLength(SMALL.maxDesks);
+    expect(roomsOf(s, 'marketing')).toHaveLength(0);
+    expect(S.desksIn(s, first.id)).toHaveLength(LARGE.maxDesks);
     expect(S.freeSeatsIn(s, first.id)).toBe(0);
     expect(S.freeSeatsIn(s, 'garage')).toBe(0);
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup: A.desk.price + A.laptop.price, rent: LARGE.rent, upstairs: 0 });
 
     act(s, hire('product'));
     const rooms = roomsOf(s, 'product');
     expect(rooms).toHaveLength(2);
     const second = rooms[1];
-    // row 5 is blocked by the garage, the lobby and the first room, so the next free 2×2 spot starts on row 4, at the left
-    expect(second).toMatchObject({ x: 0, y: CONFIG.grid.garage.y - SMALL.h, floor: 0, size: 'small', rent: SMALL.rent });
+    // the first room took the left of the row above the garage; a second 3×2 fits beside it on the same row
+    expect(second).toMatchObject({ x: FIRST_ROOM.x + LARGE.w, y: FIRST_ROOM.y, floor: 0, size: 'large', rent: LARGE.rent });
     expect(S.desksIn(s, second.id)).toHaveLength(1);
-    expect(staff(s)[seatsBeforeSecondRoom].roomId).toBe(second.id);
-    expect(S.monthlyRent(s)).toBe(2 * SMALL.rent);
-    expect(s.book.cf.capex).toBe((seatsBeforeSecondRoom + 1) * (A.desk.price + A.laptop.price));
+    expect(staff(s)[1 + LARGE.maxDesks]).toMatchObject({ role: 'product', roomId: second.id });
+    expect(S.monthlyRent(s)).toBe(2 * LARGE.rent);
+    expect(s.book.cf.capex).toBe((2 + LARGE.maxDesks) * (A.desk.price + A.laptop.price));
   });
 
   it('refuses with a reason: not enough cash, a department outside the game, no space left on the lot', () => {
@@ -230,19 +248,32 @@ describe('hireRole (DESIGN 0: one fixed hire per department, auto-provisioned)',
     }
     expect(s.people).toHaveLength(1);
 
-    // the lot: the garage's spare desk, then 40 free cells → ten small rooms → forty engineers, then nowhere to put a desk
+    // the lot (DESIGN.md 0 "Space (v2)"): the garage's spare desk, then six large rooms downstairs (the 2×2 gap beside the
+    // lobby takes no 3×2), then the second floor with its eight; only when that is full too is the lot full
     s.cash = 100_000_000;
-    const freeCells = CONFIG.grid.w * CONFIG.grid.h - CONFIG.grid.garage.w * CONFIG.grid.garage.h - CONFIG.grid.lobby.w * CONFIG.grid.lobby.h;
-    const seats = CONFIG.rooms.garage.maxDesks - 1 + (freeCells / (SMALL.w * SMALL.h)) * SMALL.maxDesks;
+    const downstairs = CONFIG.rooms.garage.maxDesks - 1 + GROUND_ROOMS * LARGE.maxDesks;
+    const upstairs = UPSTAIRS_ROOMS * LARGE.maxDesks;
     let n = 0;
     while (canDispatch(s, hire('product')).ok) {
       act(s, hire('product'));
       n += 1;
+      if (n === downstairs) {
+        expect(s.floors).toBe(1);
+        expect(roomsOf(s, 'product')).toHaveLength(GROUND_ROOMS);
+        expect(validSpots(s, 'product', 'large', 0)).toEqual([]);
+      }
     }
-    expect(n).toBe(seats);
-    expect(roomsOf(s, 'product')).toHaveLength(freeCells / (SMALL.w * SMALL.h));
+    expect(n).toBe(downstairs + upstairs);
+    expect(s.floors).toBe(2);
+    expect(roomsOf(s, 'product')).toHaveLength(GROUND_ROOMS + UPSTAIRS_ROOMS);
+    expect(roomsOf(s, 'product').filter((r) => r.floor === 1)).toHaveLength(UPSTAIRS_ROOMS);
     expect(canDispatch(s, hire('product'))).toEqual({ ok: false, reason: 'No space left on the lot.' });
-    expect(canDispatch(s, { type: 'buyDemoRoom' })).toEqual({ ok: false, reason: 'No space left on the lot.' });
+    // the same answer for a department without a room: the garage is full and neither floor has a spot
+    expect(canDispatch(s, hire('sales'))).toEqual({ ok: false, reason: 'No space left on the lot.' });
+    // the demo room keeps its 2×2 footprint, which still fits in the gap beside the lobby
+    expect(canDispatch(s, { type: 'buyDemoRoom' })).toEqual({ ok: true });
+    act(s, { type: 'buyDemoRoom' });
+    expect(roomsOf(s, 'demo')[0]).toMatchObject({ floor: 0, x: CONFIG.grid.lobby.x + CONFIG.grid.lobby.w, y: CONFIG.grid.lobby.y });
   });
 
   it('setupCost and roomRentForHire describe the seat the hire would get whatever the cash: short of cash, the garage\'s spare desk is still a desk, not a room', () => {
@@ -263,10 +294,10 @@ describe('hireRole (DESIGN 0: one fixed hire per department, auto-provisioned)',
 
     // the garage is full now: the next engineer needs a room, with or without the money for it
     s.cash = 500;
-    expect(tournament.roomRentForHire(s, 'product')).toBe(SMALL.rent);
+    expect(tournament.roomRentForHire(s, 'product')).toBe(LARGE.rent);
     expect(canDispatch(s, hire('product')).ok).toBe(false);
     s.cash = 1_000_000;
-    expect(tournament.roomRentForHire(s, 'product')).toBe(SMALL.rent);
+    expect(tournament.roomRentForHire(s, 'product')).toBe(LARGE.rent);
     expect(canDispatch(s, hire('product'))).toEqual({ ok: true });
   });
 
@@ -355,9 +386,10 @@ describe('fireRole (DESIGN 0: the most recent hire leaves with three months of s
     expect(canDispatch(s, fire('sales'))).toEqual({ ok: false, reason: 'Nobody to let go.' });
     expect(dispatch(s, fire('sales')).ok).toBe(false);
     expect(s.book.cf.severance).toBe(2 * RULES.hire.sales.salary * CONFIG.people.severanceMonths);
-    // the empty room stays, rent and all (DESIGN.md 0 has no room closing)
-    expect(roomsOf(s, 'sales')).toHaveLength(1);
-    expect(S.monthlyRent(s)).toBe(2 * SMALL.rent);
+    // DESIGN.md 0 "Space (v2)": the Sales room emptied with its last rep and closed itself; the Product room stays
+    expect(roomsOf(s, 'sales')).toHaveLength(0);
+    expect(roomsOf(s, 'product')).toHaveLength(1);
+    expect(S.monthlyRent(s)).toBe(LARGE.rent);
   });
 
   it('of two hires on the same day the later one leaves, even when their ids straddle a power of ten (hire order, not id text)', () => {
@@ -381,16 +413,14 @@ describe('fireRole (DESIGN 0: the most recent hire leaves with three months of s
     expect(tournament.lastHire(s, 'product')).toBe(first);
     expect(s.visuals.some((v) => v.t === 'leave' && v.personId === second.id && v.reason === 'fired')).toBe(true);
     expect(s.visuals.some((v) => v.t === 'leave' && v.personId === first.id)).toBe(false);
-    // the Product room's desk is the one freed, not the garage's: the next hire reuses it, no capex, no new room
+    // the Product room emptied, not the garage: it closed itself (DESIGN.md 0 "Space (v2)"), so the next hire opens one again
     expect(S.freeSeatsIn(s, 'garage')).toBe(0);
-    expect(S.freeSeatsIn(s, room.id)).toBe(1);
-    expect(tournament.setupCost(s, 'product')).toBe(0);
-    expect(tournament.roomRentForHire(s, 'product')).toBe(0);
-    const capex = s.book.cf.capex;
+    expect(S.roomById(s, room.id)).toBeUndefined();
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup: A.desk.price, rent: LARGE.rent, upstairs: 0 }); // the laptop is spare
     act(s, hire('product'));
-    expect(s.book.cf.capex).toBe(capex);
     expect(roomsOf(s, 'product')).toHaveLength(1);
-    expect(staff(s)[1].roomId).toBe(room.id);
+    expect(roomsOf(s, 'product')[0].id).not.toBe(room.id);
+    expect(staff(s)[1].roomId).toBe(roomsOf(s, 'product')[0].id);
   });
 
   it('refuses when nobody works in the department and never touches the founder', () => {
@@ -401,6 +431,300 @@ describe('fireRole (DESIGN 0: the most recent hire leaves with three months of s
     expect(s.people).toHaveLength(1);
     expect(s.people[0].founder).toBe(true);
     expect(s.book.cf.severance).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- space
+
+/** Hires engineers until no Product room fits downstairs any more: the garage's spare desk, then six large rooms. Returns the hires. */
+function fillGroundFloor(s: GameState): number {
+  const n = CONFIG.rooms.garage.maxDesks - 1 + GROUND_ROOMS * LARGE.maxDesks;
+  for (let i = 0; i < n; i++) act(s, hire('product'));
+  expect(roomsOf(s, 'product')).toHaveLength(GROUND_ROOMS);
+  expect(roomsOf(s, 'product').every((r) => r.floor === 0 && S.freeSeatsIn(s, r.id) === 0 && S.desksIn(s, r.id).length === LARGE.maxDesks)).toBe(true);
+  expect(validSpots(s, 'product', 'large', 0)).toEqual([]);
+  expect(S.freeSeatsIn(s, 'garage')).toBe(0);
+  expect(s.floors).toBe(1);
+  return n;
+}
+
+describe('space (DESIGN 0 "Space (v2)": large rooms, the second floor built by the hire that needs it, rooms that close themselves)', () => {
+  it('the hire that finds the ground floor full builds the second floor ($60k capex, floors 2) and sits in a large room upstairs; later rooms go up for the rent alone', () => {
+    const s = game();
+    fund(s, 6); // financing, so the books still reconcile at the close
+    fillGroundFloor(s);
+    const price = A.secondFloor.price;
+    const setup = A.desk.price + A.laptop.price;
+    expect(tournament.upstairsCostForHire(s, 'product')).toBe(price);
+    expect(canDispatch(s, hire('product'))).toEqual({ ok: true });
+    const capex = s.book.cf.capex;
+    const cash = s.cash;
+    const people = staff(s).length;
+
+    act(s, hire('product'));
+
+    expect(s.floors).toBe(2);
+    const [floor] = S.assetsOfKind(s, 'secondFloor');
+    expect(floor).toMatchObject({ kind: 'secondFloor', cost: price, bookValue: price, lifeMonths: A.secondFloor.lifeMonths, boughtDay: 0, roomId: null });
+    expect(S.assetsOfKind(s, 'secondFloor')).toHaveLength(1);
+    // DESIGN.md 9: the floor is capex, cash now and profit later
+    expect(s.book.cf.capex).toBe(capex + price + setup);
+    expect(s.cash).toBe(cash - price - setup);
+    expect(s.book.pnl.depreciation).toBe(0);
+    expect(ledger.profitOf(s.book)).toBe(0);
+    const up = roomsOf(s, 'product').filter((r) => r.floor === 1);
+    expect(up).toHaveLength(1);
+    // upstairs has no garage and no lobby: the first room takes the bottom-left of the empty grid
+    expect(up[0]).toMatchObject({ floor: 1, x: 0, y: CONFIG.grid.h - LARGE.h, size: 'large', rent: LARGE.rent });
+    expect(S.desksIn(s, up[0].id)).toHaveLength(1);
+    expect(staff(s)).toHaveLength(people + 1);
+    expect(staff(s)[people]).toMatchObject({ role: 'product', roomId: up[0].id, hasLaptop: true });
+    expect(S.monthlyRent(s)).toBe((GROUND_ROOMS + 1) * LARGE.rent);
+    expect(s.visuals.some((v) => v.t === 'asset' && v.kind === 'secondFloor' && v.op === 'buy')).toBe(true);
+    expect(s.visuals.some((v) => v.t === 'room' && v.op === 'open' && v.roomId === up[0].id)).toBe(true);
+    expect(s.log.some((l) => /second floor/i.test(l.text))).toBe(true);
+
+    // built once: the next room of any department goes upstairs for its rent alone
+    expect(tournament.upstairsCostForHire(s, 'sales')).toBe(0);
+    expect(tournament.hireCosts(s, 'sales')).toEqual({ setup, rent: LARGE.rent, upstairs: 0 });
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup, rent: 0, upstairs: 0 });
+    act(s, hire('sales'));
+    expect(roomsOf(s, 'sales')[0]).toMatchObject({ floor: 1, x: LARGE.w, y: CONFIG.grid.h - LARGE.h, size: 'large' });
+    expect(S.assetsOfKind(s, 'secondFloor')).toHaveLength(1);
+    expect(s.floors).toBe(2);
+
+    // the floor depreciates like any asset and the close reconciles (DESIGN.md 9)
+    advanceTo(s, D);
+    expect(s.history).toHaveLength(1);
+    expect(s.history[0].pnl.depreciation).toBeGreaterThanOrEqual(price / A.secondFloor.lifeMonths - 0.01);
+    expect(ledger.checkIdentities(s.history[0])).toEqual([]);
+  });
+
+  it('the board caption and the cash reason count the floor ("$60k to build upstairs") for every department that would need a room, until it is built', () => {
+    const s = game();
+    s.cash = 100_000_000;
+    fillGroundFloor(s);
+    const price = A.secondFloor.price;
+    const setup = A.desk.price + A.laptop.price;
+    // the caption: the setup, the room's rent and the floor; the floor is not part of the setup
+    for (const role of RULES.roles) {
+      expect(tournament.upstairsCostForHire(s, role), role).toBe(price);
+      expect(tournament.hireCosts(s, role), role).toEqual({ setup, rent: LARGE.rent, upstairs: price });
+    }
+    expect(tournament.setupCost(s, 'product')).toBe(setup);
+    expect(tournament.roomRentForHire(s, 'product')).toBe(LARGE.rent);
+
+    // the cash check counts the floor, and says so
+    const needed = RULES.hire.sales.salary + setup + price;
+    s.cash = needed - 1;
+    expect(canDispatch(s, hire('sales'))).toEqual({ ok: false, reason: `Not enough cash: ${fmtMoney(needed)} for the first month, the setup and ${fmtMoney(price)} to build upstairs.` });
+    expect(dispatch(s, hire('sales')).ok).toBe(false);
+    expect(s.floors).toBe(1);
+    expect(S.assetsOfKind(s, 'secondFloor')).toHaveLength(0);
+    expect(roomsOf(s, 'sales')).toHaveLength(0);
+    expect(tournament.hireCosts(s, 'sales')).toEqual({ setup, rent: LARGE.rent, upstairs: price });
+
+    // with exactly the money the rep builds the floor and sits upstairs
+    s.cash = needed;
+    expect(canDispatch(s, hire('sales'))).toEqual({ ok: true });
+    act(s, hire('sales'));
+    expect(s.floors).toBe(2);
+    expect(s.cash).toBe(RULES.hire.sales.salary); // the floor and the setup leave now; the first month's pay accrues day by day
+    expect(roomsOf(s, 'sales')[0].floor).toBe(1);
+    expect(staff(s)[staff(s).length - 1]).toMatchObject({ role: 'sales', roomId: roomsOf(s, 'sales')[0].id });
+
+    // built: the caption drops the floor everywhere and the cash reason is the plain one again
+    for (const role of RULES.roles) expect(tournament.upstairsCostForHire(s, role), role).toBe(0);
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup, rent: LARGE.rent, upstairs: 0 });
+    expect(tournament.hireCosts(s, 'sales')).toEqual({ setup, rent: 0, upstairs: 0 });
+    const plain = RULES.hire.product.salary + setup;
+    expect(canDispatch(s, hire('product'))).toEqual({ ok: false, reason: `Not enough cash: ${fmtMoney(plain)} for the first month and the setup.` });
+    s.cash = plain;
+    expect(canDispatch(s, hire('product'))).toEqual({ ok: true });
+  });
+
+  it('fireRole closes the room it empties: desks sold at 60% of book through the ledger, rent gone, the spot free for the next room, the books reconciled', () => {
+    const s = game();
+    act(s, hire('marketing')); // the garage's spare desk
+    advanceTo(s, 4);
+    act(s, hire('product')); // the garage is full: a large Product room opens
+    const [room] = roomsOf(s, 'product');
+    const [desk] = S.desksIn(s, room.id);
+    expect(room).toMatchObject(FIRST_ROOM);
+    expect(S.monthlyRent(s)).toBe(LARGE.rent);
+    expect(validSpots(s, 'product', 'large', 0)).not.toContainEqual({ x: room.x, y: room.y });
+    const [, eng] = staff(s);
+    const cash = s.cash;
+    const assetsBefore = s.assets.length;
+
+    act(s, fire('product'));
+
+    const severance = RULES.hire.product.salary * CONFIG.people.severanceMonths;
+    const proceeds = desk.bookValue * CONFIG.assets.resaleOfBook;
+    expect(staff(s).map((p) => p.role)).toEqual(['marketing']);
+    expect(S.roomById(s, room.id)).toBeUndefined();
+    expect(s.rooms.map((r) => r.kind).sort()).toEqual(['garage', 'lobby']);
+    expect(s.assets.some((a) => a.id === desk.id)).toBe(false);
+    expect(s.assets).toHaveLength(assetsBefore - 1);
+    expect(S.spareLaptops(s)).toBe(1);
+    // DESIGN.md 5/9: 60% of book is cash in, the other 40% a loss on the P&L
+    expect(s.book.cf.disposalProceeds).toBeCloseTo(proceeds);
+    expect(s.book.pnl.disposalLoss).toBeCloseTo(desk.bookValue - proceeds);
+    expect(s.book.cf.severance).toBe(severance);
+    expect(s.cash).toBeCloseTo(cash - severance + proceeds);
+    expect(S.monthlyRent(s)).toBe(0);
+    // what the player sees: the leaver first, then the room going
+    const leaveAt = s.visuals.findIndex((v) => v.t === 'leave' && v.personId === eng.id && v.reason === 'fired');
+    const closeAt = s.visuals.findIndex((v) => v.t === 'room' && v.op === 'close' && v.roomId === room.id);
+    expect(leaveAt).toBeGreaterThanOrEqual(0);
+    expect(closeAt).toBeGreaterThan(leaveAt);
+    expect(s.log[s.log.length - 2].text).toMatch(/^Let .* go\. Severance/);
+    expect(s.log[s.log.length - 1]).toEqual({
+      day: 4, tone: 'info',
+      text: `The Product room is empty and closes: rent ${fmtMoney(LARGE.rent)}/mo stops, desks sold for ${fmtMoney(proceeds)}.`,
+    });
+
+    // the spot is free again: the next engineer opens a new room right there (a new desk; the laptop is the spare one)
+    expect(validSpots(s, 'product', 'large', 0)).toContainEqual({ x: room.x, y: room.y });
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup: A.desk.price, rent: LARGE.rent, upstairs: 0 });
+    act(s, hire('product'));
+    const [again] = roomsOf(s, 'product');
+    expect(again.id).not.toBe(room.id);
+    expect(again).toMatchObject({ x: room.x, y: room.y, floor: 0, size: 'large', rent: LARGE.rent });
+    expect(S.monthlyRent(s)).toBe(LARGE.rent);
+
+    // the books reconcile at the close with the disposal and the severance in them (DESIGN.md 9)
+    advanceTo(s, D);
+    expect(s.history).toHaveLength(1);
+    expect(s.history[0].cf.disposalProceeds).toBeCloseTo(proceeds);
+    expect(s.history[0].pnl.severance).toBe(severance);
+    expect(ledger.checkIdentities(s.history[0])).toEqual([]);
+  });
+
+  it('never closes the garage, the lobby or the demo room, nor a room someone still sits in, the founder included', () => {
+    const s = game();
+    fund(s, 1);
+    act(s, hire('sales')); // the garage's spare desk
+    act(s, hire('sales')); // the Sales room
+    act(s, hire('sales')); // a second desk in it
+    act(s, { type: 'buyDemoRoom' });
+    const [room] = roomsOf(s, 'sales');
+    expect(S.desksIn(s, room.id)).toHaveLength(2);
+
+    act(s, fire('sales')); // one rep stays in the room: it keeps both desks and its rent
+    expect(S.roomById(s, room.id)).toBeDefined();
+    expect(S.desksIn(s, room.id)).toHaveLength(2);
+    expect(S.freeSeatsIn(s, room.id)).toBe(1);
+    expect(S.monthlyRent(s)).toBe(LARGE.rent);
+    expect(s.book.cf.disposalProceeds).toBe(0);
+    expect(s.visuals.filter((v) => v.t === 'room' && v.op === 'close')).toHaveLength(0);
+
+    act(s, fire('sales')); // the last rep in the room: it closes, both desks sold
+    expect(S.roomById(s, room.id)).toBeUndefined();
+    expect(s.book.cf.disposalProceeds).toBeCloseTo(2 * A.desk.price * CONFIG.assets.resaleOfBook);
+    expect(s.visuals.filter((v) => v.t === 'room' && v.op === 'close')).toHaveLength(1);
+
+    act(s, fire('sales')); // the rep in the garage: the garage, the lobby and the demo room stay
+    expect(staff(s)).toHaveLength(0);
+    expect(s.rooms.map((r) => r.kind).sort()).toEqual(['demo', 'garage', 'lobby']);
+    expect(S.desksIn(s, 'garage')).toHaveLength(CONFIG.rooms.garage.maxDesks);
+    expect(S.hasDemoRoom(s)).toBe(true);
+    expect(S.assetsOfKind(s, 'demoRoom')).toHaveLength(1);
+    expect(S.monthlyRent(s)).toBe(0);
+    expect(s.visuals.filter((v) => v.t === 'room' && v.op === 'close')).toHaveLength(1);
+
+    // the founder's room never closes while they sit there
+    act(s, hire('product')); // the garage's freed desk
+    act(s, hire('product')); // the Product room
+    const [pr] = roomsOf(s, 'product');
+    act(s, { type: 'buyAsset', kind: 'desk', roomId: pr.id });
+    const founder = s.people[0];
+    expect(founder.founder).toBe(true);
+    founder.roomId = pr.id; // the engine's founder-role switch seats them in a department room; the tournament has no such control
+    act(s, fire('product')); // the engineer in the room leaves; the founder is still there
+    expect(staff(s)).toHaveLength(1);
+    expect(S.roomById(s, pr.id)).toBeDefined();
+    expect(S.occupantsOf(s, pr.id)).toEqual([founder]);
+    expect(S.desksIn(s, pr.id)).toHaveLength(2);
+    expect(S.monthlyRent(s)).toBe(LARGE.rent);
+    expect(s.visuals.filter((v) => v.t === 'room' && v.op === 'close')).toHaveLength(1);
+  });
+
+  it('the engine\'s closeRoom still closes a room with people in it exactly once under the flag: severance for them, one close, the garage and the lobby untouched', () => {
+    const s = game();
+    fund(s, 1);
+    act(s, hire('support')); // the garage's spare desk
+    act(s, hire('support')); // the Support room
+    act(s, hire('support')); // a second desk in it
+    const [room] = roomsOf(s, 'support');
+    expect(S.occupantsOf(s, room.id)).toHaveLength(2);
+    const before = s.rooms.length;
+
+    act(s, { type: 'closeRoom', roomId: room.id });
+
+    expect(s.rooms).toHaveLength(before - 1);
+    expect(S.roomById(s, room.id)).toBeUndefined();
+    expect(s.rooms.map((r) => r.kind).sort()).toEqual(['garage', 'lobby']);
+    expect(staff(s)).toHaveLength(1);
+    expect(staff(s)[0].roomId).toBe('garage');
+    expect(s.visuals.filter((v) => v.t === 'leave' && v.reason === 'roomClosed')).toHaveLength(2);
+    expect(s.visuals.filter((v) => v.t === 'room' && v.op === 'close')).toHaveLength(1);
+    expect(s.book.cf.disposalProceeds).toBeCloseTo(2 * A.desk.price * CONFIG.assets.resaleOfBook);
+    expect(s.book.cf.severance).toBe(2 * RULES.hire.support.salary * CONFIG.people.severanceMonths);
+    expect(S.monthlyRent(s)).toBe(0);
+  });
+
+  it('the full engine keeps rooms small and open and never builds upstairs; the flag alone closes a room emptied by a quit through staff.fire', () => {
+    useFullEngine();
+    expect(RULES.roomSize).toBe('small');
+    expect(RULES.autoCloseRooms).toBe(false);
+    expect(RULES.upstairs).toBe(false);
+    const s = game();
+    s.cash = 100_000_000;
+    act(s, hire('product')); // the garage's spare desk
+    act(s, hire('product')); // a small Product room
+    const [room] = roomsOf(s, 'product');
+    expect(room).toMatchObject({ size: 'small', w: SMALL.w, h: SMALL.h, rent: SMALL.rent, floor: 0 });
+    expect(S.roomMaxDesks(room)).toBe(SMALL.maxDesks);
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup: A.desk.price + A.laptop.price, rent: 0, upstairs: 0 });
+
+    act(s, fire('product')); // the room empties and stays, rent and all
+    expect(S.roomById(s, room.id)).toBeDefined();
+    expect(S.desksIn(s, room.id)).toHaveLength(1);
+    expect(S.occupantsOf(s, room.id)).toHaveLength(0);
+    expect(S.monthlyRent(s)).toBe(SMALL.rent);
+    expect(s.book.cf.disposalProceeds).toBe(0);
+    expect(s.visuals.filter((v) => v.t === 'room' && v.op === 'close')).toHaveLength(0);
+    const severance = RULES.hire.product.salary * CONFIG.people.severanceMonths;
+    expect(s.book.cf.severance).toBe(severance);
+
+    // the flag, whatever the engine: a quit (no severance) through staff.fire closes the room it empties
+    act(s, hire('product')); // reuses the desk
+    const [, eng] = staff(s);
+    expect(eng.roomId).toBe(room.id);
+    RULES.autoCloseRooms = true;
+    const cash = s.cash;
+    staffSim.fire(s, eng.id, 'quit');
+    expect(S.roomById(s, room.id)).toBeUndefined();
+    expect(s.book.cf.severance).toBe(severance);
+    expect(s.cash).toBeCloseTo(cash + A.desk.price * CONFIG.assets.resaleOfBook);
+    expect(s.visuals.filter((v) => v.t === 'room' && v.op === 'close')).toHaveLength(1);
+    expect(s.visuals.some((v) => v.t === 'leave' && v.personId === eng.id && v.reason === 'quit')).toBe(true);
+    expect(s.log[s.log.length - 1].text).toMatch(/^The Product room is empty and closes/);
+    RULES.autoCloseRooms = false;
+
+    // the ground floor fills with small rooms and then the lot is full: no second floor by itself
+    const freeCells = CONFIG.grid.w * CONFIG.grid.h - CONFIG.grid.garage.w * CONFIG.grid.garage.h - CONFIG.grid.lobby.w * CONFIG.grid.lobby.h;
+    const smallRooms = freeCells / (SMALL.w * SMALL.h);
+    while (canDispatch(s, hire('product')).ok) act(s, hire('product'));
+    expect(roomsOf(s, 'product')).toHaveLength(smallRooms);
+    expect(roomsOf(s, 'product').every((r) => r.size === 'small' && r.floor === 0)).toBe(true);
+    expect(staff(s)).toHaveLength(CONFIG.rooms.garage.maxDesks - 1 + smallRooms * SMALL.maxDesks);
+    expect(s.floors).toBe(1);
+    expect(S.assetsOfKind(s, 'secondFloor')).toHaveLength(0);
+    expect(tournament.upstairsCostForHire(s, 'product')).toBe(0);
+    expect(tournament.hireCosts(s, 'product')).toEqual({ setup: A.desk.price + A.laptop.price, rent: SMALL.rent, upstairs: 0 });
+    expect(canDispatch(s, hire('product'))).toEqual({ ok: false, reason: 'No space left on the lot.' });
   });
 });
 

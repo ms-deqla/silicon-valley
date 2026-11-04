@@ -6,7 +6,7 @@ import { CONFIG, RULES } from './config';
 import { chance, pick, pickWeighted, randRange } from './rng';
 import * as L from './ledger';
 import * as S from './selectors';
-import { assignLaptops } from './assets';
+import { assignLaptops, disposeDesksIn } from './assets';
 import { ARCHETYPE_WORD, FIRST_NAMES, JOB_WORD, LAST_NAMES, QUIRK_PITCH, fmtMoney, roomName } from './names';
 import { no, OK, ROLES, ROLE_LABEL } from './types';
 import type { Archetype, Candidate, GameState, Person, Quirk, Role, Verdict } from './types';
@@ -149,6 +149,7 @@ export function canFire(state: GameState, personId: string): Verdict {
 /**
  * Removes the person. 'fired' and 'roomClosed' pay severance (3 months' base salary);
  * 'quit' and 'poached' do not. Frees the desk and the laptop. Logs and pushes visual 'leave'.
+ * Under RULES.autoCloseRooms the room they sat in closes when nobody is left in it.
  */
 export function fire(state: GameState, personId: string, reason: 'fired' | 'quit' | 'poached' | 'roomClosed'): void {
   const idx = state.people.findIndex((p) => p.id === personId);
@@ -161,6 +162,7 @@ export function fire(state: GameState, personId: string, reason: 'fired' | 'quit
     severance = S.severanceOf(state, p);
     L.paySeverance(state, severance);
   }
+  const roomId = p.roomId;
   state.people.splice(idx, 1);
   p.roomId = null;
   p.hasLaptop = false;
@@ -176,6 +178,31 @@ export function fire(state: GameState, personId: string, reason: 'fired' | 'quit
     poached: `${p.name} was poached by a competitor.`,
   } as const;
   state.log.push({ day: state.day, text: texts[reason], tone: reason === 'quit' || reason === 'poached' ? 'bad' : 'info' });
+  // DESIGN.md 0 "Space (v2)": every way of leaving shares this one hook. Not for 'roomClosed':
+  // that room is being closed by rooms.closeRoom, which sells the desks and tells the story itself.
+  if (RULES.autoCloseRooms && reason !== 'roomClosed' && roomId !== null) closeEmptiedRoom(state, roomId);
+}
+
+/**
+ * DESIGN.md 0 "Space (v2)": a department room closes itself the moment its last person leaves:
+ * its desks are sold at 60% of book (ledger.recordDisposal), the room goes and the rent stops.
+ * Never the garage, the lobby or the demo room, and never while anyone (the founder included)
+ * still sits there.
+ */
+function closeEmptiedRoom(state: GameState, roomId: string): void {
+  const room = S.roomById(state, roomId);
+  if (!room || room.kind === 'garage' || room.kind === 'lobby' || room.kind === 'demo') return;
+  if (S.occupantsOf(state, room.id).length > 0) return;
+  const proceeds = disposeDesksIn(state, room.id);
+  state.rooms.splice(state.rooms.indexOf(room), 1);
+  // the last Marketing room takes the ad budget with it, as rooms.closeRoom does
+  if (room.kind === 'marketing' && !S.hasRoom(state, 'marketing')) state.adBudget = 0;
+  state.visuals.push({ t: 'room', day: state.day, roomId: room.id, op: 'close' });
+  state.log.push({
+    day: state.day,
+    text: `The ${roomName(room.kind)} is empty and closes: rent ${fmtMoney(room.rent)}/mo stops, desks sold for ${fmtMoney(proceeds)}.`,
+    tone: 'info',
+  });
 }
 
 // ---------------------------------------------------------------- raises

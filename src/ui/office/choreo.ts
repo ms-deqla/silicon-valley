@@ -11,7 +11,9 @@ import type { AssetKind, VisualEvent } from '../../sim/types';
 import type { Anchors, RoomView, Scene, SeatInfo } from './scene';
 import type { Crowd, Waypoint } from './walkers';
 import { badgeWalker, coinAt, countKind, findWalker, retargetWalker, spawnEffect, spawnWalker, wp } from './walkers';
-import { DEPT, GOLD, ROOM_BASE, SMB_SHIRTS, WALKER_BODY } from './palette';
+import { DEPT, GOLD, ROOM_BASE, SMB_SHIRTS, TROUSERS, WALKER_BODY } from './palette';
+import { CARRY_BAG, CARRY_BOX, CARRY_CASE, CARRY_LAPTOP } from './primitives';
+import type { Carry } from './primitives';
 import { hash01 } from './util';
 import type { Pt } from './util';
 
@@ -31,6 +33,11 @@ export interface ChoreoContext {
   lastRoomCentre(roomId: string): Pt | null;
   /** where an asset of this kind lives (the room of the newest one), or null */
   assetPoint(kind: AssetKind): Pt | null;
+}
+
+/** DESIGN 17: visitors carry a bag or a laptop; which one is hashed from the spawn counter */
+function visitorCarry(crowd: Crowd): Carry {
+  return hash01('carry', crowd.spawned) < 0.5 ? CARRY_BAG : CARRY_LAPTOP;
 }
 
 function streetSides(crowd: Crowd, a: Anchors): { from: number; to: number } {
@@ -84,7 +91,7 @@ export function applyVisual(crowd: Crowd, scene: Scene, ev: VisualEvent, cx: Cho
         path.push(wp(a.receptionFront.x, a.receptionFront.y, 0.45, 'coin'));
         leave(path, a, sides.to);
         const shirt = SMB_SHIRTS[Math.floor(hash01('shirt', crowd.spawned) * SMB_SHIRTS.length)];
-        spawnWalker(crowd, 'smb', path, { body: shirt, coinAmount: cx.smbPrice });
+        spawnWalker(crowd, 'smb', path, { body: shirt, coinAmount: cx.smbPrice, carry: visitorCarry(crowd) });
       } else if (ev.outcome === 'enterprise') {
         const waiting = findWalker(crowd, 'waiting');
         const path: Waypoint[] = [];
@@ -94,8 +101,8 @@ export function applyVisual(crowd: Crowd, scene: Scene, ev: VisualEvent, cx: Cho
         if (sales) visitRoom(path, a, sales, 2.0, 'slip', a.tray.x, a.tray.y);
         else path.push(wp(a.lobbyPoint.x, a.lobbyPoint.y, 2.0, 'slip', a.tray.x, a.tray.y));
         leave(path, a, sides.to);
-        if (waiting) retargetWalker(waiting, 'enterprise', path, { body: WALKER_BODY.enterprise, alpha: 1 });
-        else spawnWalker(crowd, 'enterprise', path, { body: WALKER_BODY.enterprise });
+        if (waiting) retargetWalker(waiting, 'enterprise', path, { body: WALKER_BODY.enterprise, alpha: 1, carry: CARRY_CASE });
+        else spawnWalker(crowd, 'enterprise', path, { body: WALKER_BODY.enterprise, carry: CARRY_CASE, outfit: 3 });
       } else if (ev.outcome === 'left') {
         const waiting = findWalker(crowd, 'waiting');
         const path: Waypoint[] = [];
@@ -103,7 +110,7 @@ export function applyVisual(crowd: Crowd, scene: Scene, ev: VisualEvent, cx: Cho
         path.push(wp(a.lobbyPoint.x, a.lobbyPoint.y, 0.5, 'puff'));
         leave(path, a, sides.to);
         if (waiting) retargetWalker(waiting, 'left', path, { body: WALKER_BODY.left, alpha: 1 });
-        else spawnWalker(crowd, 'left', path, { body: WALKER_BODY.left });
+        else spawnWalker(crowd, 'left', path, { body: WALKER_BODY.left, carry: visitorCarry(crowd) });
       } else {
         const n = countKind(crowd, 'waiting');
         if (n >= MAX_WAITING) { badgeWalker(crowd, 'waiting'); break; }
@@ -111,7 +118,7 @@ export function applyVisual(crowd: Crowd, scene: Scene, ev: VisualEvent, cx: Cho
         const path: Waypoint[] = [];
         enter(path, a, sides.from);
         path.push(wp(spot.x, spot.y, Infinity));
-        spawnWalker(crowd, 'waiting', path, { body: WALKER_BODY.waiting });
+        spawnWalker(crowd, 'waiting', path, { body: WALKER_BODY.waiting, carry: CARRY_CASE, outfit: 3 });
       }
       break;
     }
@@ -136,7 +143,10 @@ export function applyVisual(crowd: Crowd, scene: Scene, ev: VisualEvent, cx: Cho
       via(path, a, floor, 0);
       if (sup) path.push(wp(a.lobbyPoint.x, a.lobbyPoint.y));
       leave(path, a, sides.to);
-      spawnWalker(crowd, 'churn', path, { body: ev.kind === 'enterprise' ? WALKER_BODY.enterprise : WALKER_BODY.churn, alpha: 0.85 });
+      spawnWalker(crowd, 'churn', path, {
+        body: ev.kind === 'enterprise' ? WALKER_BODY.enterprise : WALKER_BODY.churn, alpha: 0.85,
+        carry: ev.kind === 'enterprise' ? CARRY_CASE : CARRY_BAG,
+      });
       break;
     }
     case 'feature': {
@@ -170,7 +180,11 @@ export function applyVisual(crowd: Crowd, scene: Scene, ev: VisualEvent, cx: Cho
       enter(path, a, sides.from);
       via(path, a, 0, seat.floor);
       path.push(wp(seat.x, seat.y + 0.25 * c));
-      spawnWalker(crowd, 'hire', path, { body: DEPT[seat.role], personId: ev.personId, skin: seat.skin, hair: seat.hair });
+      // the new hire walks in looking exactly as they will at the desk, laptop under the arm
+      spawnWalker(crowd, 'hire', path, {
+        body: DEPT[seat.role], personId: ev.personId, skin: seat.skin, hair: seat.hair,
+        outfit: seat.look.outfit, style: seat.look.style, trousers: TROUSERS.indexOf(seat.look.trousers), carry: CARRY_LAPTOP,
+      });
       break;
     }
     case 'leave': {
@@ -182,11 +196,16 @@ export function applyVisual(crowd: Crowd, scene: Scene, ev: VisualEvent, cx: Cho
       via(path, a, floor, 0);
       path.push(wp(a.lobbyPoint.x, a.lobbyPoint.y));
       leave(path, a, sides.to);
+      // a leaver carries their box out
       spawnWalker(crowd, 'leave', path, {
         body: seat ? DEPT[seat.role] : WALKER_BODY.left,
         personId: ev.personId,
         skin: seat ? seat.skin : undefined,
         hair: seat ? seat.hair : undefined,
+        outfit: seat ? seat.look.outfit : undefined,
+        style: seat ? seat.look.style : undefined,
+        trousers: seat ? TROUSERS.indexOf(seat.look.trousers) : undefined,
+        carry: CARRY_BOX,
       });
       break;
     }
