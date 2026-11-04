@@ -1,6 +1,12 @@
 # Render Blueprint for Silicon Valley (https://siliconvalley.party).
 # Static site (the game) + Node web service (the shared leaderboard) + Postgres.
 # Spec: https://render.com/docs/blueprint-spec
+#
+# The live services were created by hand on 2026-11-04 in the "My Workspace" workspace
+# (static site silicon-valley at https://silicon-valley-cwqm.onrender.com, web service
+# silicon-valley-api at https://silicon-valley-api.onrender.com, Postgres silicon-valley-db,
+# all Frankfurt). Do NOT sync this file as a Blueprint on that workspace: it would create a
+# second copy of each service. It documents the intended configuration for a fresh workspace.
 services:
   # The game: Vite build, published from dist/.
   - type: web
@@ -23,11 +29,10 @@ services:
   - type: web
     name: silicon-valley-api
     runtime: node
-    rootDir: server
     region: frankfurt
     plan: starter
-    buildCommand: npm ci || npm install
-    startCommand: npm start
+    buildCommand: cd server && (npm ci || npm install)
+    startCommand: cd server && npm start
     healthCheckPath: /health
     buildFilter:
       paths:
