@@ -21,6 +21,7 @@ export function useFullEngine(): void {
   RULES.founderRole = true;
   RULES.sell = true;
   RULES.events = [...EVENT_TYPES];
+  RULES.roundMonths = null;
 }
 
 /** The published ruleset, exactly as config.ts declares it. */

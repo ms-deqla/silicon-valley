@@ -115,7 +115,7 @@ export function hintLine(state: GameState): string {
   }
   if (S.serversShort(state) > 0) return 'Servers are short: outage risk every month.';
   const runway = S.runwayMonths(state);
-  if (runway !== null && runway < LOW_RUNWAY_MONTHS) return `Runway: ${runway.toFixed(1)} months. Cut costs; investors knock on their own schedule.`;
+  if (runway !== null && runway < LOW_RUNWAY_MONTHS) return `Runway: ${runway.toFixed(1)} months. Investors knock on their own schedule; a lifeline comes if the bank runs dry.`;
   const asking = state.people.find((p) => p.raisePending);
   if (asking) return `${asking.name} is asking for a raise.`;
   const ar = L.openReceivables(state);

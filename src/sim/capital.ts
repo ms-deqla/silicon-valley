@@ -54,7 +54,7 @@ export function dailyCapital(state: GameState): void {
   if (state.status !== 'playing') return;
   if (!state.card) checkMaturity(state);
   if (!state.card) checkDesperation(state);
-  if (!state.card && state.day >= state.schedule.nextKnockDay) openKnock(state, false);
+  if (!state.card && state.day >= state.schedule.nextKnockDay && !scheduledKnockBlackout(state)) openKnock(state, false);
 }
 
 /**
@@ -125,6 +125,13 @@ function repayAtMaturity(state: GameState, loan: Loan, text: string): void {
   state.loan = null;
   state.log.push({ day: state.day, text, tone: 'info' });
   state.visuals.push({ t: 'toast', day: state.day, text: `Loan repaid: ${fmtMoney(loan.principal)}`, tone: 'info' });
+}
+
+/** DESIGN.md 0: no scheduled knock in the last stretch of a round; money that arrives in the final month cannot be used. */
+function scheduledKnockBlackout(state: GameState): boolean {
+  if (RULES.roundMonths === null) return false;
+  const roundDays = RULES.roundMonths * D;
+  return roundDays - state.day < RULES.lastKnockDays;
 }
 
 /** DESIGN.md 10: desperation knock when runway < 2 months, at most once per 60 days. */
@@ -225,7 +232,8 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
       + (RULES.loans ? ` A loan at ${fmtRate(loanRate)} a year is the other way out.` : '');
   } else {
     body = `${voice.fund} values ${state.companyName} at ${fmtMoney(preMoney)} before the money. They would put in ${fmtMoney(amount)} `
-      + `for ${fmtPct(share)} of the company${RULES.loans ? `, or lend it at ${fmtRate(loanRate)} a year` : ''}. Investors want ${fmtRate(val.r)} from a company like yours.`;
+      + `for ${fmtPct(share)} of the company${RULES.loans ? `, or lend it at ${fmtRate(loanRate)} a year` : ''}. Investors want ${fmtRate(val.r)} from a company like yours.`
+      + (val.operating <= 0 ? ' The business itself is not worth anything yet: they are pricing your team and your cash.' : '');
   }
 
   const card: Card = {

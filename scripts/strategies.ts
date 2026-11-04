@@ -46,6 +46,7 @@ export function applyFullEngine(): void {
   RULES.founderRole = true;
   RULES.sell = true;
   RULES.events = [...EVENT_TYPES];
+  RULES.roundMonths = null;
 }
 
 /** Switch RULES back to the published tournament ruleset (DESIGN.md 0), from the copy taken at module load. */

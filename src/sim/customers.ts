@@ -84,7 +84,7 @@ export function dailyCustomers(state: GameState): void {
   expireProspects(state);
 }
 
-/** DESIGN.md 8: arrivals are Poisson per day; 10% are enterprise prospects, the rest SMB. */
+/** DESIGN.md 8: arrivals are Poisson per day; CONFIG.customers.enterpriseShare of them are enterprise prospects, the rest SMB. */
 function arrivals(state: GameState): void {
   const n = poisson(state.rng, S.visitorsPerMonth(state) / D);
   state.book.visitors += n;
@@ -94,7 +94,7 @@ function arrivals(state: GameState): void {
   }
 }
 
-/** DESIGN.md 8: SMB converts at 0.8 × feature factor (× 0.75 with a competitor), at today's price. */
+/** DESIGN.md 8: SMB converts at conversionMax × feature factor × saturation (× 0.75 with a competitor), at today's price. */
 function arriveSmb(state: GameState): void {
   if (chance(state.rng, S.smbConversion(state))) {
     state.customers.push(newSmbCustomer(state, S.smbPrice(state)));

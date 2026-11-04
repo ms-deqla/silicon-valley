@@ -125,7 +125,10 @@ export function computeValuation(state: GameState): Valuation {
 
   // DESIGN.md 10: floor = cash + 0.9 AR + 0.6 assets at book − debt + acqui-hire min(Σ skill × $50k, cap), founder included
   let acquihire = 0;
-  for (const p of state.people) acquihire += p.skill * V.acquihirePerSkill;
+  // DESIGN.md 10: acquirers pay for a team that has worked together: a hire counts after acquihireVestDays, the founder always
+  for (const p of state.people) {
+    if (p.founder || state.day - p.hiredDay >= V.acquihireVestDays) acquihire += p.skill * V.acquihirePerSkill;
+  }
   acquihire = Math.min(acquihire, V.acquihireCap);
   const floor = state.cash + V.arRecovery * openReceivables(state) + V.assetRecovery * assetsAtBook(state) - debt + acquihire;
 

@@ -856,7 +856,7 @@ describe('hint line', () => {
     const runway = selectors.runwayMonths(s);
     expect(runway).not.toBeNull();
     expect(runway).toBeLessThan(3);
-    expect(hintLine(s)).toBe(`Runway: ${runway?.toFixed(1)} months. Cut costs; investors knock on their own schedule.`);
+    expect(hintLine(s)).toBe(`Runway: ${runway?.toFixed(1)} months. Investors knock on their own schedule; a lifeline comes if the bank runs dry.`);
     rep.baseSalary = 7_000;
 
     rep.raisePending = true;

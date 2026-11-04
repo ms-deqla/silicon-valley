@@ -27,15 +27,21 @@ stay in the code and the tests but never reach the screen. Decided with the owne
   Support, Marketing), one fixed kind of person each: mid-level, skill 3, salary
   $5k / $4k / $3k / $4k a month. Buy servers ($20k) and one demo room ($40k). Accept or
   decline investors (equity only). Answer three events: late payer, press, outage.
-- **What happens by itself.** A hire gets a desk ($1k) and a laptop ($2k) and, when the
-  department has no room with a free desk, a small room ($3k/mo rent) placed on the
-  next free spot (lowest row first), so capex and rent still show in the bars; the
-  lobby appears with the first room. Firing removes the most recent hire in that
-  department with three months' severance.
+- **What happens by itself.** A hire gets a desk ($1k) and a laptop ($2k). The first
+  hire of any department takes the garage's spare desk; when neither the garage nor a
+  room of that department has a free desk or desk space, a small room ($3k/mo rent) is
+  placed on the next free spot (lowest row first), so capex and rent still show in the
+  bars; the lobby appears with the first room. Firing removes the most recent hire in
+  that department with three months' severance; an emptied room keeps its rent.
 - **Switched off.** Candidates, archetypes, quirks, morale-driven raises and quits
   (morale still moves with crowding and overload and scales output), Finance and R&D,
   loans and loan maturity, the ad budget, the competitor, poaching and recession
-  events, product tiers, selling assets, selling the company early, room placement.
+  events, product tiers, selling assets, selling the company early, room placement and
+  closing, the founder's role switch (you stay in Product).
+- **Clock details.** Game time rides the wall clock: if you leave the tab, the game
+  catches up when you return; a card left open keeps the game paused while the clock
+  runs. No scheduled investor knock opens in the last 30 game days of the round (money
+  that arrives in the final month cannot be used); lifelines still can.
 - **Screen.** The four HUD numbers, the why line and the hint line stay; Books is one
   tap away. The countdown and a live leaderboard sit on the main screen; the bottom of
   the screen is one control board: a row per department (headcount, cost, −/+) and the
@@ -148,7 +154,7 @@ and a payback estimate (price ÷ estimated monthly cash benefit).
 
 ## 8. Customers and revenue
 
-- Visitors per month = 5 + 10 × Σ marketer output + 2 × √(ad budget in $k), × 2
+- Visitors per month = 6 + 6 × Σ marketer output + 2 × √(ad budget in $k), × 2
   during press (×3 with PR push), × 0.6 during recession. Arrivals are Poisson per day.
 - 15% of visitors are enterprise prospects; they need a sales rep. The rest are SMB.
 - The market is finite: conversion and the enterprise close rate are multiplied by
@@ -220,7 +226,7 @@ Required return r (annual) = 0.12 base
   + concentration premium: largest customer's annualised revenue ÷ total annualised revenue × 0.05
   + recession: 0.05 while active
 
-Forecast: base = average of the last 6 closed months of (FCF + capex − disposal
+Forecast: base = average of the last 12 closed months of (FCF + capex − disposal
 proceeds − depreciation) i.e. operating cash flow after maintenance capex. Growth g0
 = trailing revenue growth per month, comparing 3-month average revenues 6 months
 apart (or the longest window available, at least 2 months; annual enterprise
@@ -234,14 +240,16 @@ month-60 flow is positive), capped at 5 years of that flow. DCF is an enterprise
 Operating value = max(0, DCF + cash − debt). This is what investors size offers on.
 
 Floor = cash + 0.9 × open receivables + 0.6 × assets at book − debt
-        + acqui-hire value min(Σ(skill × $50k) over all people incl. the founder, $1M).
+        + acqui-hire value min(Σ(skill × $50k) over the founder and every person hired
+        at least 90 days ago, $1M): acquirers pay for a team that has worked together,
+        so a last-minute hiring spree adds nothing.
         (Founder alone at start: $150k + $50k cash = $0.2M, as in the concept HUD.)
 
 Company value = max(operating value, floor). Equity value: debt already netted.
 Shown as one number with a 12-month sparkline. Tapping shows "Investors want r%"
 with each premium listed.
 
-Investor knocks: first at a random day in [60, 150], then every [120, 240] days.
+Investor knocks: first at a random day in [45, 120], then every [120, 240] days.
 Desperation knock when runway < 2 months (at most once per 60 days), but never
 before investors have knocked once on their own schedule; the crisis knock at a
 month-end close with cash < 0 (section 9) is always available. Offer amount
@@ -262,7 +270,7 @@ raise against its floor, and hiring cannot pump the next offer).
 ## 11. Events
 
 The first card lands on a random day in [180, 270] (none before day 180), then one
-every [90, 180] days; one card at a time, clock paused. An event needs a company of
+every [60, 150] days; one card at a time, clock paused. An event needs a company of
 some size: outage from 20 customers, competitor from 5, recession from 10; late
 payer, press and poaching have no minimum (they have their own preconditions).
 
@@ -382,7 +390,8 @@ appears here.
   seed set: balanced survives ≥ 70%; reckless dies ≥ 50%; idle never dies and its
   median value stays under $1.5M (a free founder for three years earns a small
   business, not an exit); balanced median score between $1M and $15M with p90 under
-  $50M; balanced median score at least 3× idle's median value. Engineer-first and
+  $50M; balanced median score at least 2.5× idle's median value (the engine's team
+  value vests over 90 days, which trims a hire-heavy player). Engineer-first and
   sales-first rows are informational.
 - Pacing (the first ten real minutes must have things happening), medians over the
   seed set: the idle founder ships the first feature by day 45 and has a paying

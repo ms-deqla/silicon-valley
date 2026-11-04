@@ -194,7 +194,7 @@ export const CONFIG = {
     /** no growth estimate from a window shorter than this */
     growthMinLagMonths: 2,
     /** trailing growth is trusted in proportion to last month's revenue ÷ this (tiny bases do not forecast) */
-    growthTrustRevenue: 20_000,
+    growthTrustRevenue: 20_000, // trailing growth is trusted in proportion to the recent 3-month average revenue ÷ this
     /** growth decays linearly from g0 to this annual rate (the terminal growth) over growthDecayMonths */
     terminalGrowthAnnual: 0.02,
     growthDecayMonths: 12,
@@ -207,6 +207,8 @@ export const CONFIG = {
     assetRecovery: 0.6,
     /** acqui-hire value = Σ skill × this over everyone, founder included */
     acquihirePerSkill: 50_000,
+    /** a hire counts toward the acqui-hire value only after this many days (acquirers pay for teams that have worked together); the founder always counts */
+    acquihireVestDays: 90,
     /** the acqui-hire part of the floor never exceeds this */
     acquihireCap: 1_000_000,
     /** months of company value kept in state.valueHistory: the HUD's 12-month sparkline (DESIGN.md 10) */
@@ -330,6 +332,10 @@ export interface Rules {
   /** the round: wall-clock seconds per game month, and per round */
   secondsPerMonth: number;
   roundSeconds: number;
+  /** game months in a round, or null when there is no round (the full engine) */
+  roundMonths: number | null;
+  /** no scheduled investor knock opens when fewer than this many game days remain in the round (lifelines still do) */
+  lastKnockDays: number;
 }
 
 export const RULES: Rules = {
@@ -353,4 +359,6 @@ export const RULES: Rules = {
   events: ['latePayer', 'press', 'outage'],
   secondsPerMonth: 20,
   roundSeconds: 600,
+  roundMonths: 30,
+  lastKnockDays: 30,
 };

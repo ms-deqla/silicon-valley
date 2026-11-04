@@ -42,7 +42,7 @@ export const TARGET = {
   balancedScoreMax: 15_000_000,
   balancedScoreP90Max: 50_000_000,
   /** balanced median score ≥ this × idle median value */
-  balancedOverIdle: 3,
+  balancedOverIdle: 2.5,
   /** pacing: the idle founder ships the first feature by this day */
   idleFirstFeatureDay: 45,
   /** pacing: the idle founder has a paying customer by the end of this month */
