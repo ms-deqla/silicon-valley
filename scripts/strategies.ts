@@ -4,19 +4,59 @@
  *
  * Everything here talks to the sim through its public API (src/sim/index.ts)
  * only, so the strategies can do exactly what a player at the UI can do and
- * nothing more. DESIGN.md section 16 names the five scripted strategies.
+ * nothing more. DESIGN.md section 16 names the five engine strategies (idle,
+ * engineerFirst, salesFirst, balanced, reckless) and the tournament ones (tIdle,
+ * tPlayer, tTakeAll, tDeclineAll, tAggressive).
+ *
+ * Two rulesets (RULES in config.ts): the engine strategies play the full engine
+ * (every department, raises, quits, loans, ads, all six events), the tournament
+ * strategies the published game of DESIGN.md 0 and use nothing but its actions
+ * (hireRole, fireRole, servers, buyDemoRoom, card answers). runStrategy switches
+ * RULES to the strategy's ruleset for the run and puts the caller's back after.
  *
  * Contract: the harness asks a Strategy once per game day for the actions it
  * wants, dispatches the ones canDispatch accepts (in order, re-checking before
  * each), then advances the day. While a card blocks the clock the strategy is
  * asked again on the same day, so every strategy answers open cards first.
  */
-import { ASSET_KINDS, CONFIG, ROLES, advanceDay, canDispatch, createGame, dispatch, selectors as S, validSpots } from '../src/sim';
-import type { Action, Candidate, Card, CardChoice, CardKind, GameState, MonthBook, Person, Role, RoomSize } from '../src/sim';
+import { ASSET_KINDS, CONFIG, EVENT_TYPES, ROLES, RULES, advanceDay, canDispatch, createGame, dispatch, hintLine, roomRentForHire, selectors as S, setupCost, validSpots } from '../src/sim';
+import type { Action, Candidate, Card, CardChoice, CardKind, GameState, MonthBook, Person, Role, RoomSize, Rules } from '../src/sim';
 
-export type Strategy = { name: string; act(state: GameState): Action[] };
+/** Which ruleset a strategy plays under: the full engine (DESIGN.md 1–16) or the published tournament (DESIGN.md 0). */
+export type Engine = 'full' | 'tournament';
+
+export type Strategy = { name: string; engine: Engine; act(state: GameState): Action[] };
 
 const D = CONFIG.time.daysPerMonth;
+
+// ---------------------------------------------------------------- rulesets
+
+/** The published ruleset exactly as config.ts declares it, copied at module load before any test setup or run touches RULES. */
+const TOURNAMENT_RULES: Rules = JSON.parse(JSON.stringify(RULES)) as Rules;
+
+/** Switch RULES to the full engine: every department, raises, quits, loans, Finance, R&D, the ad budget, all six events (the fields test/setup.ts sets). */
+export function applyFullEngine(): void {
+  RULES.roles = [...ROLES];
+  RULES.raises = true;
+  RULES.quits = true;
+  RULES.loans = true;
+  RULES.finance = true;
+  RULES.rnd = true;
+  RULES.adBudget = true;
+  RULES.founderRole = true;
+  RULES.sell = true;
+  RULES.events = [...EVENT_TYPES];
+}
+
+/** Switch RULES back to the published tournament ruleset (DESIGN.md 0), from the copy taken at module load. */
+export function applyTournamentRules(): void {
+  Object.assign(RULES, JSON.parse(JSON.stringify(TOURNAMENT_RULES)) as Rules);
+}
+
+export function applyEngine(engine: Engine): void {
+  if (engine === 'full') applyFullEngine();
+  else applyTournamentRules();
+}
 
 // ---------------------------------------------------------------- cards
 
@@ -239,6 +279,7 @@ function sensibleEvent(state: GameState, card: Card): number {
 /** Never acts: the founder codes alone in the garage. Declines investors; picks the no-cash event option. */
 export const idle: Strategy = {
   name: 'idle',
+  engine: 'full',
   act(state) {
     const card = answerCard(state, {
       knock: () => 'decline',
@@ -270,6 +311,7 @@ export const FOCUSED = {
  */
 export const engineerFirst: Strategy = {
   name: 'engineerFirst',
+  engine: 'full',
   act(state) {
     const card = answerCard(state, {
       knock: (s) => (s.rounds.length < FOCUSED.knocksTaken ? 'equity' : 'decline'),
@@ -305,6 +347,7 @@ export const engineerFirst: Strategy = {
  */
 export const salesFirst: Strategy = {
   name: 'salesFirst',
+  engine: 'full',
   act(state) {
     const card = answerCard(state, { knock: () => 'equity', event: sensibleEvent });
     if (card) return [card];
@@ -380,6 +423,7 @@ function balancedKnock(state: GameState, card: Card): KnockWant {
  */
 export const balanced: Strategy = {
   name: 'balanced',
+  engine: 'full',
   act(state) {
     const card = answerCard(state, { knock: balancedKnock, event: sensibleEvent });
     if (card) return [card];
@@ -441,6 +485,7 @@ export const RECKLESS = {
 /** Large rooms, seniors in every department as fast as cash allows, demo room early, max ads, no investors. */
 export const reckless: Strategy = {
   name: 'reckless',
+  engine: 'full',
   act(state) {
     const card = answerCard(state, { knock: () => 'decline', event: () => 0 });
     if (card) return [card];
@@ -471,7 +516,142 @@ export const reckless: Strategy = {
   },
 };
 
-export const strategyList: readonly Strategy[] = [idle, engineerFirst, salesFirst, balanced, reckless];
+/** The five engine strategies of DESIGN.md 16; they play the full engine (`pnpm balance --full`). */
+export const engineStrategies: readonly Strategy[] = [idle, engineerFirst, salesFirst, balanced, reckless];
+
+// ---------------------------------------------------------------- the tournament strategies (DESIGN.md 0 and 16)
+
+/** Tunables of the tournament strategies (strategy taste, not sim rules). */
+export const TOURNAMENT = {
+  /** the first support agent from this many customers (tickets exist: DESIGN.md 8) */
+  supportFromCustomers: 10,
+  /** a rep, a marketer or an agent is hired only when the cash left after the setup covers this many months of the cost run-rate the hire creates */
+  hireCoverMonths: 3,
+  /** the marketer is hired once the hint line points at Marketing (DESIGN.md 13: "Open Marketing"), under the cash rule; matched by this word */
+  marketingHint: /marketing/i,
+  /** the demo room once the bank holds more than this */
+  demoRoomCash: 100_000,
+  /** a server is bought when servers are short and this many months of costs stay in the bank afterwards */
+  serverKeepMonths: 1,
+  /** tPlayer: investor knocks taken, then every later scheduled knock declined; a lifeline (desperation knock) is always taken */
+  knocksTaken: 2,
+  /** tDeclineAll plans for no round: its hires need this many months of cover instead of hireCoverMonths */
+  unfundedCoverMonths: 6,
+};
+
+/** The department's fixed hire (DESIGN.md 0: desk, laptop and room come by themselves) when cash and the lot allow it. */
+const hireRoleStep = (state: GameState, role: Role): Action | null => okOrNull(state, { type: 'hireRole', role });
+
+/**
+ * DESIGN.md 16's careful human: a hire only when the cash left after its setup (desk, laptop) covers
+ * hireCoverMonths of the new cost run-rate, i.e. today's costs plus the salary and the rent of the
+ * room the hire would open (both as the board shows them: tournament.setupCost / roomRentForHire).
+ */
+function canCoverHire(state: GameState, role: Role, coverMonths: number): boolean {
+  const after = state.cash - setupCost(state, role);
+  const runRate = monthlyCost(state) + RULES.hire[role].salary + roomRentForHire(state, role);
+  return after >= coverMonths * runRate;
+}
+
+/** One engineer, hired on the first day the strategy acts (day 0). */
+const firstEngineer = (state: GameState): Action | null => (hired(state, 'product') < 1 ? hireRoleStep(state, 'product') : null);
+
+/** An engineer every month cash allows: one hire per calendar month, no catch-up for a month that could not afford one. */
+function engineerEveryMonth(state: GameState): Action | null {
+  const month = S.monthIndex(state.day);
+  const hiredThisMonth = state.people.some((p) => !p.founder && p.role === 'product' && S.monthIndex(p.hiredDay) === month);
+  return hiredThisMonth ? null : hireRoleStep(state, 'product');
+}
+
+/**
+ * The tournament player's other moves (DESIGN.md 16): a rep when a prospect waits, none is hired and
+ * the cash covers three months of the new run-rate; a marketer once the hint line says "Open
+ * Marketing" (the game's own advice, DESIGN.md 13) under the same cash rule; support from ten
+ * customers under the same cash rule. One hire a day, in that order (the hint itself puts the
+ * waiting prospect before marketing). A server whenever servers are short and the cash allows (a
+ * month of costs stays in the bank); the demo room once cash tops $100k; the assets can share the day.
+ */
+function tournamentSteps(state: GameState, coverMonths: number): Action[] {
+  const out: Action[] = [];
+  const push = (a: Action | null): void => { if (a) out.push(a); };
+  push(serverStep(state, TOURNAMENT.serverKeepMonths));
+  if (!S.hasDemoRoom(state) && state.cash > TOURNAMENT.demoRoomCash) push(okOrNull(state, { type: 'buyDemoRoom' }));
+  if (state.prospects.length > 0 && hired(state, 'sales') < 1) {
+    if (canCoverHire(state, 'sales', coverMonths)) push(hireRoleStep(state, 'sales'));
+  } else if (hired(state, 'marketing') < 1 && TOURNAMENT.marketingHint.test(hintLine(state))) {
+    if (canCoverHire(state, 'marketing', coverMonths)) push(hireRoleStep(state, 'marketing'));
+  } else if (state.customers.length >= TOURNAMENT.supportFromCustomers && hired(state, 'support') < 1 && canCoverHire(state, 'support', coverMonths)) {
+    push(hireRoleStep(state, 'support'));
+  }
+  return out;
+}
+
+/**
+ * A tournament strategy: nothing but the tournament actions, servers and card answers (DESIGN.md 0).
+ * `engineers` is its engineering policy, `knock` its answer to investors, `coverMonths` the cash
+ * cover its hires need; events per sensibleEvent (the tournament only has the late payer, press and
+ * outage: wait, and pay for the push or the fix when two months of costs stay in the bank).
+ */
+function tournamentStrategy(name: string, knock: CardRules['knock'], engineers: (state: GameState) => Action | null, coverMonths = (): number => TOURNAMENT.hireCoverMonths): Strategy {
+  return {
+    name,
+    engine: 'tournament',
+    act(state) {
+      const card = answerCard(state, { knock, event: sensibleEvent });
+      if (card) return [card];
+      const out: Action[] = [];
+      const engineer = engineers(state);
+      if (engineer) out.push(engineer);
+      out.push(...tournamentSteps(state, coverMonths()));
+      return out;
+    },
+  };
+}
+
+/** The idle founder under tournament rules: never acts, declines investors, picks the no-cash event option. */
+export const tIdle: Strategy = {
+  name: 'tIdle',
+  engine: 'tournament',
+  act(state) {
+    const card = answerCard(state, { knock: () => 'decline', event: (_s, c) => (c.eventType === 'latePayer' ? 0 : 1) });
+    return card ? [card] : [];
+  },
+};
+
+/**
+ * DESIGN.md 16: a careful human who follows the game's own advice. A scheduled knock is taken while
+ * fewer than knocksTaken rounds are in the bank and declined after; a lifeline (DESIGN.md 10: the
+ * desperation knock at under two months of runway) is always taken, since declining it is the end
+ * of the company and no careful founder picks that at a card.
+ */
+function playerKnock(state: GameState, card: Card): KnockWant {
+  if (card.kind === 'desperation') return 'equity';
+  return state.rounds.length < TOURNAMENT.knocksTaken ? 'equity' : 'decline';
+}
+
+/**
+ * DESIGN.md 16's scripted tournament player, a plausible careful human who follows the hint line: an
+ * engineer on day 0; a rep only when a prospect waits and the cash covers three months of the new cost
+ * run-rate; a marketer once the hint says "Open Marketing", under the same cash rule; support from ten
+ * customers under the same cash rule; a server when short and the cash allows; the demo room once cash
+ * tops $100k; the first two investor knocks taken, every later scheduled knock declined, every lifeline
+ * taken.
+ */
+export const tPlayer: Strategy = tournamentStrategy('tPlayer', playerKnock, firstEngineer);
+
+/** tPlayer, but every knock is taken. */
+export const tTakeAll: Strategy = tournamentStrategy('tTakeAll', () => 'equity', firstEngineer);
+
+/** tPlayer's moves for a founder who plans for no round (unfundedCoverMonths of cover per hire), every knock declined. */
+export const tDeclineAll: Strategy = tournamentStrategy('tDeclineAll', () => 'decline', firstEngineer, () => TOURNAMENT.unfundedCoverMonths);
+
+/** An engineer every month cash allows on top of tPlayer's other moves, every knock taken. */
+export const tAggressive: Strategy = tournamentStrategy('tAggressive', () => 'equity', engineerEveryMonth);
+
+/** The tournament strategies of DESIGN.md 16; they play the published rules (`pnpm balance`). */
+export const tournamentStrategies: readonly Strategy[] = [tIdle, tPlayer, tTakeAll, tDeclineAll, tAggressive];
+
+export const strategyList: readonly Strategy[] = [...engineStrategies, ...tournamentStrategies];
 export const STRATEGIES: Readonly<Record<string, Strategy>> = Object.fromEntries(strategyList.map((s) => [s.name, s]));
 
 // ---------------------------------------------------------------- random-but-valid policy (tests)
@@ -525,6 +705,7 @@ export function randomStrategy(policySeed: number, options: RandomPolicyOptions 
   const adSteps = Math.floor(CONFIG.marketing.adMax / CONFIG.marketing.adStep);
   return {
     name: 'random',
+    engine: 'full',
     act(state) {
       const out: Action[] = [];
       const consider = (a: Action): void => { if (ok(state, a)) out.push(a); };
@@ -629,6 +810,8 @@ export interface Pacing {
   firstKnockKind: 'knock' | 'desperation' | null;
   /** cards seen, by kind */
   cards: Record<CardKind, number>;
+  /** the day every card opened, in order (the stretches between them are the pacing of the round) */
+  cardDays: number[];
 }
 
 export interface RunResult {
@@ -663,6 +846,7 @@ function newPacing(): Pacing {
     firstKnockDay: null,
     firstKnockKind: null,
     cards: { knock: 0, desperation: 0, maturity: 0, event: 0, gameOver: 0, sold: 0 },
+    cardDays: [],
   };
 }
 
@@ -676,6 +860,7 @@ function observePacing(state: GameState, pacing: Pacing, seenCards: Set<string>)
   if (card && !seenCards.has(card.id)) {
     seenCards.add(card.id);
     pacing.cards[card.kind] += 1;
+    if (card.kind === 'knock' || card.kind === 'desperation' || card.kind === 'event' || card.kind === 'maturity') pacing.cardDays.push(card.createdDay);
     if (pacing.firstKnockDay === null && (card.kind === 'knock' || card.kind === 'desperation')) {
       pacing.firstKnockDay = card.createdDay;
       pacing.firstKnockKind = card.kind;
@@ -684,11 +869,22 @@ function observePacing(state: GameState, pacing: Pacing, seenCards: Set<string>)
 }
 
 /**
- * Play `months` months of a fresh game with `strategy`. Returns the final state
- * (status playing, gameOver or sold), one trace row per closed month and the pacing
+ * Play `months` months of a fresh game with `strategy` under the strategy's own ruleset (the full
+ * engine or the tournament rules); the caller's RULES are put back afterwards. Returns the final
+ * state (status playing, gameOver or sold), one trace row per closed month and the pacing
  * milestones. Throws when the clock stalls, i.e. a card stays unanswered.
  */
 export function runStrategy(seed: number, strategy: Strategy, months: number, opts: RunOptions = {}): RunResult {
+  const callerRules = JSON.parse(JSON.stringify(RULES)) as Rules;
+  applyEngine(strategy.engine);
+  try {
+    return play(seed, strategy, months, opts);
+  } finally {
+    Object.assign(RULES, callerRules);
+  }
+}
+
+function play(seed: number, strategy: Strategy, months: number, opts: RunOptions): RunResult {
   const state = createGame(seed);
   const trace: MonthTrace[] = [];
   const pacing = newPacing();

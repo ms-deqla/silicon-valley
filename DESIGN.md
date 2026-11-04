@@ -25,7 +25,7 @@ stay in the code and the tests but never reach the screen. Decided with the owne
   reaches zero (the buzzer sells the company). Running out of cash scores 0.
 - **What the player can do.** Hire or fire in four departments (Product, Sales,
   Support, Marketing), one fixed kind of person each: mid-level, skill 3, salary
-  $6k / $5k / $4k / $5k a month. Buy servers ($20k) and one demo room ($40k). Accept or
+  $5k / $4k / $3k / $4k a month. Buy servers ($20k) and one demo room ($40k). Accept or
   decline investors (equity only). Answer three events: late payer, press, outage.
 - **What happens by itself.** A hire gets a desk ($1k) and a laptop ($2k) and, when the
   department has no room with a free desk, a small room ($3k/mo rent) placed on the
@@ -396,11 +396,31 @@ appears here.
   a unicorn); idle's median value stays under $2M. A run shorter than 60 months
   prints these as n/a.
 - The harness prints all three lists with PASS / FAIL after its tables;
-  test/balance.test.ts asserts the same lists at 3 seeds.
-- Tournament (section 0, the published rules, 30 game months): a scripted tournament
-  player (engineer in month 1, a rep when the first prospect waits, support from 10
-  customers, a server when short, the first two knocks taken) survives ≥ 80% and
-  scores a median between $0.5M and $5M; taking every knock does not beat taking two
-  by more than 1.5× and declining every knock does not beat taking two (dilution is a
-  real trade-off); an idle founder scores under $1M; the engine-only strategies above
-  run under the full engine (`--full`).
+  test/balance.test.ts asserts the same lists at 20 seeds.
+- Tournament (section 0, the published rules): the tournament strategies × 200 seeds
+  × 30 game months, everything read at the buzzer, medians over the seed set. The
+  scripted player (tPlayer) is a plausible careful human who follows the hint line,
+  not a bot: an engineer on day 0; a sales rep only when a prospect waits AND the cash
+  left after the setup covers 3 months of the new cost run-rate (today's costs plus
+  the salary and the rent of the room the hire would open); a marketer once the hint
+  says "Open Marketing", under the same cash rule; support from 10 customers under
+  the same cash rule (one hire a day, in that order: the hint itself puts a waiting
+  prospect before marketing); a server when short and the cash allows (a month of
+  costs stays in the bank); the demo room once cash tops $100k; the first two
+  investor knocks taken, every later scheduled knock declined, every lifeline
+  (desperation knock) taken. tTakeAll plays the same moves and takes every knock;
+  tDeclineAll plays them for a founder who plans for no round (6 months of cover per
+  hire) and declines every knock; tIdle never acts; tAggressive (an engineer every
+  month cash allows, every knock taken) is informational. Targets: tPlayer survives
+  ≥ 80% and is dead by month 6 in at most 5% of the seeds; tPlayer median score in
+  [$2M, $6M] (a hint-following player over two and a half years: a business, not an
+  exit); tPlayer median score ≥ 2 × tIdle median score; tTakeAll median ≤ 1.5 ×
+  tPlayer median (raising is a trade-off, not a free lunch); tDeclineAll median ≤
+  tPlayer median; tIdle median under $1.5M. Pacing (tPlayer medians): the first
+  paying customer by month 3, the first signed enterprise deal by month 8, the first
+  investor knock by month 4; at least one investor card and one event card per round
+  in 90% of the seeds; no stretch longer than 120 s without an investor or event
+  card (p90 of the longest stretch over the seeds). The buzzer is not a lottery on
+  invoice timing: the company value falls by at most 20% between two closes after
+  month 12 (median of the biggest fall over surviving rounds). The engine-only
+  strategies above run under the full engine (`--full`).

@@ -129,8 +129,9 @@ export const CONFIG = {
   },
 
   marketing: {
-    baseVisitorsPerMonth: 5,
-    visitorsPerOutput: 10,
+    /** the first marketer turns the base trickle into ~3.6× the traffic (6 → 6 + 6 × 2.55): a strong move, not the whole game */
+    baseVisitorsPerMonth: 6,
+    visitorsPerOutput: 6,
     /** visitors += this × sqrt(ad budget in $k) */
     adVisitorsPerSqrtK: 2,
     adMax: 20_000,
@@ -199,8 +200,8 @@ export const CONFIG = {
     growthDecayMonths: 12,
     /** terminal value is at most this many years of the horizon flow */
     terminalMaxYears: 5,
-    /** the DCF base is the average operating cash flow (after maintenance capex) of the last this many closed months */
-    runRateMonths: 6,
+    /** the DCF base is the average operating cash flow (after maintenance capex) of the last this many closed months: a year catches every annual enterprise invoice exactly once, so the value does not swing on collection timing */
+    runRateMonths: 12,
     /** floor = cash + arRecovery × open receivables + assetRecovery × assets at book − debt + acqui-hire value */
     arRecovery: 0.9,
     assetRecovery: 0.6,
@@ -213,8 +214,8 @@ export const CONFIG = {
   },
 
   capital: {
-    /** the first investor knock lands on a random day in this range, then one every knockEveryDays after any knock */
-    firstKnockDay: [60, 150] as [number, number],
+    /** the first investor knock lands on a random day in this range (before the early rep hire runs the cash out), then one every knockEveryDays after any knock */
+    firstKnockDay: [45, 120] as [number, number],
     knockEveryDays: [120, 240] as [number, number],
     /** a desperation knock opens when runway < this many months, at most once per desperationCooldownDays */
     desperationRunwayMonths: 2,
@@ -245,9 +246,9 @@ export const CONFIG = {
   },
 
   events: {
-    /** the first event card lands on a random day in this range (none before day 180), then one every everyDays */
+    /** the first event card lands on a random day in this range (none before day 180), then one every everyDays (two to five months: under one per three months, DESIGN.md 16) */
     firstDay: [180, 270] as [number, number],
-    everyDays: [90, 180] as [number, number],
+    everyDays: [60, 150] as [number, number],
     /** late payer: "Wait" pushes the due date out latePayerDelayDays with latePayerDefault chance of a write-off (halved with finance staff) */
     latePayerDelayDays: 60,
     latePayerDefault: 0.15,
@@ -320,6 +321,10 @@ export interface Rules {
   finance: boolean;
   rnd: boolean;
   adBudget: boolean;
+  /** the founder can be moved between Product and Sales (DESIGN.md 6); off in the tournament, which has no such control */
+  founderRole: boolean;
+  /** selling the company before the buzzer (DESIGN.md 12); off in the tournament, where only the buzzer sells */
+  sell: boolean;
   /** events that can fire */
   events: EventType[];
   /** the round: wall-clock seconds per game month, and per round */
@@ -330,10 +335,10 @@ export interface Rules {
 export const RULES: Rules = {
   roles: ['product', 'sales', 'support', 'marketing'],
   hire: {
-    product: { archetype: 'mid', skill: 3, salary: 6_000 },
-    sales: { archetype: 'mid', skill: 3, salary: 5_000 },
-    support: { archetype: 'mid', skill: 3, salary: 4_000 },
-    marketing: { archetype: 'mid', skill: 3, salary: 5_000 },
+    product: { archetype: 'mid', skill: 3, salary: 5_000 },
+    sales: { archetype: 'mid', skill: 3, salary: 4_000 },
+    support: { archetype: 'mid', skill: 3, salary: 3_000 },
+    marketing: { archetype: 'mid', skill: 3, salary: 4_000 },
     finance: { archetype: 'mid', skill: 3, salary: 5_000 },
     rnd: { archetype: 'senior', skill: 4, salary: 11_000 },
   },
@@ -343,6 +348,8 @@ export const RULES: Rules = {
   finance: false,
   rnd: false,
   adBudget: false,
+  founderRole: false,
+  sell: false,
   events: ['latePayer', 'press', 'outage'],
   secondsPerMonth: 20,
   roundSeconds: 600,

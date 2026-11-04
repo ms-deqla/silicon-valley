@@ -1,26 +1,35 @@
 /**
- * Balance harness (DESIGN.md section 16): every strategy × N seeds × M months, headless, then a
- * compact table, a pacing table, a five-year table and the DESIGN 16 targets (balance at month 36,
- * pacing, five-year guard at month 60) with PASS / FAIL.
+ * Balance harness (DESIGN.md section 16), headless strategies × N seeds × M months.
  *
- *   pnpm balance                                   # 5 strategies × 200 seeds × 60 months
- *   pnpm balance --seeds 50 --months 36 --strategy balanced   # the five-year guard prints n/a
- *   pnpm balance --seed-base 1000 --strict        # --strict: exit code 1 when a target fails
+ * By default the published game: the tournament strategies (DESIGN.md 0 rules) over 30 game months,
+ * a compact table (survival, early deaths, value, score, founder share, knocks taken at month 30), the
+ * pacing table and the DESIGN 16 tournament targets with PASS / FAIL. With --full the engine strategies
+ * play the full engine over 60 months: the balance table, the pacing table, the five-year table and the
+ * DESIGN 16 engine targets (balance at month 36, pacing, five-year guard at month 60).
+ *
+ *   pnpm balance                                   # tournament: 5 strategies × 200 seeds × 30 months
+ *   pnpm balance --seeds 50 --strategy tPlayer     # one strategy; targets that need the others print n/a
+ *   pnpm balance --full                            # engine: 5 strategies × 200 seeds × 60 months
+ *   pnpm balance --full --months 36                # the five-year guard prints n/a
+ *   pnpm balance --seed-base 1000 --strict         # --strict: exit code 1 when a target fails
  *
  * Dead runs count as $0 for value and score (the game over screen scores 0, DESIGN.md 12).
- * test/balance.test.ts imports the statistics and the target list from here and runs them at
+ * test/balance.test.ts imports the statistics and both target lists from here and runs them at
  * small scale, so the doc, the harness and the test share one definition of every target.
  */
-import { STRATEGIES, runStrategy, strategyList } from './strategies';
+import { STRATEGIES, engineStrategies, runStrategy, strategyList, tournamentStrategies } from './strategies';
 import type { MonthTrace, Pacing, Strategy } from './strategies';
-import { CONFIG } from '../src/sim';
+import { CONFIG, RULES } from '../src/sim';
 
 // tsx runs this under Node; the project has no Node typings, so declare the two things we touch.
 declare const process: { argv: string[]; exitCode?: number };
 
 const D = CONFIG.time.daysPerMonth;
+/** wall-clock seconds per game day under the tournament clock (DESIGN.md 0: one month per RULES.secondsPerMonth) */
+const SEC_PER_DAY = RULES.secondsPerMonth / D;
 
-export const DEFAULTS = { seeds: 200, months: 60, seedBase: 1 };
+/** Months per mode: the tournament round is 30 game months (DESIGN.md 0), the engine run five years. */
+export const DEFAULTS = { seeds: 200, seedBase: 1, months: { tournament: 30, full: 60 } };
 
 /** DESIGN.md 16 targets: balance at month 36, pacing, and the five-year guard at month 60 (medians over the seed set). */
 export const TARGET = {
@@ -56,16 +65,50 @@ export const TARGET = {
   idleValue60MedianMax: 2_000_000,
 };
 
+/** DESIGN.md 16 tournament targets (DESIGN.md 0 rules, read at the buzzer: month 30; medians over the seed set). */
+export const TOURNAMENT_TARGET = {
+  /** the month every tournament target is read at (the round: 30 game months) */
+  month: 30,
+  /** the scripted player (tPlayer) survives this share of seeds */
+  playerSurvival: 0.80,
+  /** tPlayer is dead by the close of this month in at most playerEarlyDeathMax of the seeds */
+  playerEarlyDeathMonth: 6,
+  playerEarlyDeathMax: 0.05,
+  /** tPlayer median score in [min, max] (a hint-following player over two and a half years: a business, not an exit) */
+  playerScoreMin: 2_000_000,
+  playerScoreMax: 6_000_000,
+  /** tPlayer median score ≥ this × tIdle median score (hiring and raising must beat sitting in the garage) */
+  playerOverIdle: 2,
+  /** taking every knock beats taking two by at most this factor (raising is a trade-off, not a free lunch) */
+  takeAllOverPlayer: 1.5,
+  /** an idle founder's median score stays under this */
+  idleScoreMax: 1_500_000,
+  /** pacing (tPlayer medians): the first paying customer, the first signed enterprise deal and the first investor knock by these months */
+  playerFirstCustomerMonth: 3,
+  playerFirstDealMonth: 8,
+  playerFirstKnockMonth: 4,
+  /** pacing: this share of tPlayer's rounds sees at least one investor card and one event card */
+  playerCardsShare: 0.9,
+  /** pacing: the longest stretch without an investor or event card, p90 over the seeds, stays within this many wall-clock seconds */
+  playerCardGapSec: 120,
+  /** the buzzer is not a lottery: the value's biggest month-to-month fall after this month is at most this (median over surviving rounds) */
+  playerMaxDropFromMonth: 12,
+  playerMaxDropMax: 0.20,
+};
+
 interface Args {
   seeds: number;
-  months: number;
+  /** null: the mode's default */
+  months: number | null;
   strategy: string | null;
   seedBase: number;
   strict: boolean;
+  /** the engine strategies under the full engine instead of the tournament */
+  full: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { seeds: DEFAULTS.seeds, months: DEFAULTS.months, strategy: null, seedBase: DEFAULTS.seedBase, strict: false };
+  const args: Args = { seeds: DEFAULTS.seeds, months: null, strategy: null, seedBase: DEFAULTS.seedBase, strict: false, full: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = (): string => {
@@ -85,9 +128,11 @@ function parseArgs(argv: string[]): Args {
       case '--strategy': args.strategy = next(); break;
       case '--seed-base': args.seedBase = int(next()); break;
       case '--strict': args.strict = true; break;
+      case '--full': args.full = true; break;
       case '--help': case '-h':
-        console.log('usage: pnpm balance [--seeds N] [--months M] [--strategy name] [--seed-base S] [--strict]');
-        console.log(`strategies: ${strategyList.map((s) => s.name).join(', ')}`);
+        console.log('usage: pnpm balance [--full] [--seeds N] [--months M] [--strategy name] [--seed-base S] [--strict]');
+        console.log(`tournament strategies (default, ${DEFAULTS.months.tournament} months): ${tournamentStrategies.map((s) => s.name).join(', ')}`);
+        console.log(`engine strategies (--full, ${DEFAULTS.months.full} months): ${engineStrategies.map((s) => s.name).join(', ')}`);
         process.exitCode = 0;
         throw new Error('help');
       default:
@@ -113,6 +158,8 @@ export interface RunRow {
   pacing: Pacing;
   equity: boolean;
   loan: boolean;
+  /** equity rounds taken (knocks accepted) */
+  rounds: number;
   error?: string;
 }
 
@@ -121,6 +168,7 @@ function emptyPacing(): Pacing {
     firstFeatureDay: null, firstCustomerDay: null, firstProspectDay: null, firstDealDay: null,
     firstKnockDay: null, firstKnockKind: null,
     cards: { knock: 0, desperation: 0, maturity: 0, event: 0, gameOver: 0, sold: 0 },
+    cardDays: [],
   };
 }
 
@@ -136,9 +184,10 @@ export function runOne(strategy: Strategy, seed: number, months: number): RunRow
       pacing,
       equity: state.rounds.length > 0,
       loan: state.loan !== null || state.history.some((b) => b.fin.loanIn > 0),
+      rounds: state.rounds.length,
     };
   } catch (e) {
-    return { seed, status: 'error', months: 0, endDay: 0, trace: [], pacing: emptyPacing(), equity: false, loan: false, error: e instanceof Error ? e.message : String(e) };
+    return { seed, status: 'error', months: 0, endDay: 0, trace: [], pacing: emptyPacing(), equity: false, loan: false, rounds: 0, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -218,6 +267,31 @@ export interface PacingStats {
   knocksPerRun: number;
   desperationsPerRun: number;
   eventsPerRun: number;
+  /** share of runs that saw at least one investor card (scheduled or desperation) and at least one event card */
+  knockAndEvent: number;
+  /** the longest stretch of a run without a card (from day 0, between cards, to the end), in wall-clock seconds of the tournament clock */
+  cardGapSec: Quantiles;
+  /** the value's biggest month-to-month fall after TOURNAMENT_TARGET.playerMaxDropFromMonth, as a share of the month before; surviving runs only */
+  maxDrop: Quantiles;
+}
+
+/** The longest stretch of the run without a card, in days: from day 0, between cards, and from the last card to the end. */
+function longestCardGapDays(row: RunRow): number {
+  const marks = [0, ...row.pacing.cardDays, row.endDay];
+  let longest = 0;
+  for (let i = 1; i < marks.length; i++) longest = Math.max(longest, marks[i] - marks[i - 1]);
+  return longest;
+}
+
+/** The biggest fall of the value between two closes after month `fromMonth`, relative to the earlier close; 0 when it never fell. */
+function maxDropOf(trace: MonthTrace[], fromMonth: number): number {
+  let worst = 0;
+  for (let i = fromMonth; i < trace.length; i++) {
+    const prev = trace[i - 1].value;
+    const cur = trace[i].value;
+    if (prev > 0 && cur < prev) worst = Math.max(worst, (prev - cur) / prev);
+  }
+  return worst;
 }
 
 function pacingOf(rows: RunRow[]): PacingStats {
@@ -225,6 +299,7 @@ function pacingOf(rows: RunRow[]): PacingStats {
   const month = (d: number | null): number | null => (d === null ? null : monthOfDay(d));
   const avg = (f: (r: RunRow) => number): number => (n ? rows.reduce((s, r) => s + f(r), 0) / n : Number.NaN);
   const withKnock = rows.filter((r) => r.pacing.firstKnockDay !== null);
+  const alive = rows.filter((r) => r.status !== 'gameOver' && r.status !== 'error');
   return {
     firstFeatureDay: quantiles(rows.map((r) => r.pacing.firstFeatureDay)),
     firstCustomerMonth: quantiles(rows.map((r) => month(r.pacing.firstCustomerDay))),
@@ -237,6 +312,9 @@ function pacingOf(rows: RunRow[]): PacingStats {
     knocksPerRun: avg((r) => r.pacing.cards.knock),
     desperationsPerRun: avg((r) => r.pacing.cards.desperation),
     eventsPerRun: avg((r) => r.pacing.cards.event),
+    knockAndEvent: avg((r) => (r.pacing.cards.knock + r.pacing.cards.desperation > 0 && r.pacing.cards.event > 0 ? 1 : 0)),
+    cardGapSec: quantiles(rows.map((r) => longestCardGapDays(r) * SEC_PER_DAY)),
+    maxDrop: quantiles(alive.map((r) => maxDropOf(r.trace, TOURNAMENT_TARGET.playerMaxDropFromMonth))),
   };
 }
 
@@ -328,6 +406,63 @@ export function summarize(name: string, rows: RunRow[], horizon: number, seconds
   };
 }
 
+/** The tournament table row: everything read at the close of TOURNAMENT_TARGET.month (the buzzer). */
+export interface TournamentSummary {
+  name: string;
+  n: number;
+  errors: number;
+  /** share of runs alive after the close of TOURNAMENT_TARGET.month (NaN when the horizon is shorter) */
+  survival: number;
+  death: number;
+  /** share of runs dead by the close of TOURNAMENT_TARGET.playerEarlyDeathMonth (NaN when the horizon is shorter) */
+  earlyDeath: number;
+  /** p10 / median / p90 company value at the buzzer; dead runs count as $0 */
+  valueP10: number;
+  valueMed: number;
+  valueP90: number;
+  /** p10 / median / p90 score (value × founder share) at the buzzer; dead runs count as $0 */
+  scoreP10: number;
+  scoreMed: number;
+  scoreP90: number;
+  /** median founder share at the buzzer */
+  shareMed: number;
+  /** equity rounds taken per run, averaged */
+  knocksTaken: number;
+  customersMed: number;
+  peopleMed: number;
+  pacing: PacingStats;
+  seconds: number;
+}
+
+export function summarizeTournament(name: string, rows: RunRow[], horizon: number, seconds = 0): TournamentSummary {
+  const n = rows.length;
+  const m = TOURNAMENT_TARGET.month;
+  const e = TOURNAMENT_TARGET.playerEarlyDeathMonth;
+  const atMonth = n > 0 && horizon >= m;
+  const value = rows.map((r) => valueAt(r, m, horizon));
+  const score = rows.map((r) => scoreAt(r, m, horizon));
+  return {
+    name,
+    n,
+    errors: rows.filter((r) => r.status === 'error').length,
+    survival: atMonth ? rows.filter((r) => survivedTo(r, m)).length / n : Number.NaN,
+    death: atMonth ? rows.filter((r) => r.status === 'gameOver' && !survivedTo(r, m)).length / n : Number.NaN,
+    earlyDeath: n > 0 && horizon >= e ? rows.filter((r) => r.status === 'gameOver' && !survivedTo(r, e)).length / n : Number.NaN,
+    valueP10: percentile(value, 0.1),
+    valueMed: median(value),
+    valueP90: percentile(value, 0.9),
+    scoreP10: percentile(score, 0.1),
+    scoreMed: median(score),
+    scoreP90: percentile(score, 0.9),
+    shareMed: median(rows.map((r) => shareAt(r, m, horizon))),
+    knocksTaken: n ? rows.reduce((s, r) => s + r.rounds, 0) / n : Number.NaN,
+    customersMed: median(rows.map((r) => traceFieldAt(r, m, horizon, 'customers'))),
+    peopleMed: median(rows.map((r) => traceFieldAt(r, m, horizon, 'people'))),
+    pacing: pacingOf(rows),
+    seconds,
+  };
+}
+
 // ---------------------------------------------------------------- printing
 
 export function money(x: number): string {
@@ -384,8 +519,32 @@ function printTable(summaries: Summary[], horizon: number): void {
   console.log(`(horizon ${horizon} months; medians over seeds; dead runs count as $0 for value and score; months = closed months before the run ended)`);
 }
 
-function printPacing(summaries: Summary[]): void {
-  const header = ['pacing (p10/med/p90)', 'feature day', 'customer month', 'prospect month', 'deal month', 'knock month', 'desperate first', 'events/month', 'cards/run knock+desp+event'];
+function printTournamentTable(summaries: TournamentSummary[], horizon: number): void {
+  const m = TOURNAMENT_TARGET.month;
+  const e = TOURNAMENT_TARGET.playerEarlyDeathMonth;
+  const header = ['strategy', 'runs', `survive@${m}`, `die@${m}`, `die@${e}`, 'err', `value@${m} p10/med/p90`, `score@${m} p10/med/p90`, `share@${m}`, 'knocks taken', `customers@${m}`, `people@${m}`, 'time'];
+  const rows = summaries.map((s) => [
+    s.name,
+    String(s.n),
+    pct(s.survival),
+    pct(s.death),
+    pct(s.earlyDeath),
+    String(s.errors),
+    `${money(s.valueP10)}/${money(s.valueMed)}/${money(s.valueP90)}`,
+    `${money(s.scoreP10)}/${money(s.scoreMed)}/${money(s.scoreP90)}`,
+    pct(s.shareMed),
+    Number.isFinite(s.knocksTaken) ? s.knocksTaken.toFixed(1) : 'n/a',
+    num(s.customersMed),
+    num(s.peopleMed),
+    `${s.seconds.toFixed(1)}s`,
+  ]);
+  console.log(table([header, ...rows]));
+  console.log(`(tournament rules, DESIGN.md 0; horizon ${horizon} months, everything read at the buzzer (month ${m}); medians over seeds; dead runs count as $0 for value and score; knocks taken = equity rounds per run)`);
+}
+
+/** The pacing table; both the engine and the tournament summaries carry a PacingStats. */
+function printPacing(summaries: { name: string; pacing: PacingStats }[]): void {
+  const header = ['pacing (p10/med/p90)', 'feature day', 'customer month', 'prospect month', 'deal month', 'knock month', 'desperate first', 'events/month', 'cards/run knock+desp+event', 'knock & event', 'card gap s med/p90', `value fall>${TOURNAMENT_TARGET.playerMaxDropFromMonth} med/p90`];
   const rows = summaries.map((s) => {
     const p = s.pacing;
     return [
@@ -398,10 +557,13 @@ function printPacing(summaries: Summary[]): void {
       pct(p.firstKnockDesperate),
       Number.isFinite(p.eventsPerMonth) ? p.eventsPerMonth.toFixed(2) : 'n/a',
       `${p.knocksPerRun.toFixed(1)}+${p.desperationsPerRun.toFixed(1)}+${p.eventsPerRun.toFixed(1)}`,
+      pct(p.knockAndEvent),
+      `${num(p.cardGapSec.med)}/${num(p.cardGapSec.p90)}`,
+      `${pct(p.maxDrop.med)}/${pct(p.maxDrop.p90)}`,
     ];
   });
   console.log('\n' + table([header, ...rows]));
-  console.log('(first feature / customer / enterprise prospect / signed deal / investor card over the seed set; "never" = not reached by the horizon)');
+  console.log(`(first feature / customer / enterprise prospect / signed deal / investor card over the seed set; "never" = not reached by the horizon; knock & event = runs that saw at least one investor card and one event card; card gap = the longest stretch without a card at ${RULES.secondsPerMonth} s per month; value fall = the biggest month-to-month fall of the value after month ${TOURNAMENT_TARGET.playerMaxDropFromMonth}, surviving runs)`);
 }
 
 function printFiveYear(summaries: Summary[], horizon: number): void {
@@ -543,8 +705,96 @@ export function evaluateTargets(summaries: Summary[], horizon: number): Target[]
   return out;
 }
 
-function printTargets(targets: Target[]): void {
-  console.log('\nDESIGN.md 16 targets');
+/** The DESIGN.md 16 tournament target list (DESIGN.md 0 rules, month 30), evaluated on the summaries at hand. */
+export function evaluateTournamentTargets(summaries: TournamentSummary[], horizon: number): Target[] {
+  const by = (name: string): TournamentSummary | undefined => summaries.find((s) => s.name === name);
+  const player = by('tPlayer');
+  const takeAll = by('tTakeAll');
+  const declineAll = by('tDeclineAll');
+  const idle = by('tIdle');
+  const T = TOURNAMENT_TARGET;
+  const m = T.month;
+  const atMonth = horizon >= m;
+  const short = `horizon ${horizon} < ${m} months`;
+  const out: Target[] = [];
+
+  out.push({
+    label: `tPlayer survives ≥ ${pct(T.playerSurvival)} over ${m} months`,
+    actual: player ? (atMonth ? pct(player.survival) : short) : 'not run',
+    pass: player && atMonth ? player.survival >= T.playerSurvival : null,
+  });
+  const e = T.playerEarlyDeathMonth;
+  const atEarly = horizon >= e;
+  out.push({
+    label: `tPlayer is dead by month ${e} in at most ${pct(T.playerEarlyDeathMax)} of the seeds`,
+    actual: player ? (atEarly ? pct(player.earlyDeath) : `horizon ${horizon} < ${e} months`) : 'not run',
+    pass: player && atEarly ? player.earlyDeath <= T.playerEarlyDeathMax : null,
+  });
+  out.push({
+    label: `tPlayer median score at month ${m} in [${money(T.playerScoreMin)}, ${money(T.playerScoreMax)}]`,
+    actual: player ? (atMonth ? money(player.scoreMed) : short) : 'not run',
+    pass: player && atMonth ? player.scoreMed >= T.playerScoreMin && player.scoreMed <= T.playerScoreMax : null,
+  });
+  out.push({
+    label: `tPlayer median score ≥ ${T.playerOverIdle} × tIdle median score (month ${m})`,
+    actual: player && idle ? (atMonth ? `${money(player.scoreMed)} vs ${T.playerOverIdle} × ${money(idle.scoreMed)}` : short) : 'not run',
+    pass: player && idle && atMonth ? player.scoreMed >= T.playerOverIdle * idle.scoreMed : null,
+  });
+  out.push({
+    label: `tTakeAll median score ≤ ${T.takeAllOverPlayer} × tPlayer median score (month ${m})`,
+    actual: takeAll && player ? (atMonth ? `${money(takeAll.scoreMed)} vs ${T.takeAllOverPlayer} × ${money(player.scoreMed)}` : short) : 'not run',
+    pass: takeAll && player && atMonth ? takeAll.scoreMed <= T.takeAllOverPlayer * player.scoreMed : null,
+  });
+  out.push({
+    label: `tDeclineAll median score ≤ tPlayer median score (month ${m})`,
+    actual: declineAll && player ? (atMonth ? `${money(declineAll.scoreMed)} vs ${money(player.scoreMed)}` : short) : 'not run',
+    pass: declineAll && player && atMonth ? declineAll.scoreMed <= player.scoreMed : null,
+  });
+  out.push({
+    label: `tIdle median score at month ${m} under ${money(T.idleScoreMax)}`,
+    actual: idle ? (atMonth ? money(idle.scoreMed) : short) : 'not run',
+    pass: idle && atMonth ? idle.scoreMed < T.idleScoreMax : null,
+  });
+
+  // pacing (tPlayer, medians over the seed set): the first ten real minutes must have things happening
+  const medP90 = (v: Quantiles): string => `median month ${num(v.med)} (p90 ${num(v.p90)})`;
+  out.push({
+    label: `tPlayer has a paying customer by month ${T.playerFirstCustomerMonth}`,
+    actual: player ? medP90(player.pacing.firstCustomerMonth) : 'not run',
+    pass: player ? player.pacing.firstCustomerMonth.med <= T.playerFirstCustomerMonth : null,
+  });
+  out.push({
+    label: `tPlayer signs the first enterprise deal by month ${T.playerFirstDealMonth}`,
+    actual: player ? medP90(player.pacing.firstDealMonth) : 'not run',
+    pass: player ? player.pacing.firstDealMonth.med <= T.playerFirstDealMonth : null,
+  });
+  out.push({
+    label: `tPlayer's first investor knock lands by month ${T.playerFirstKnockMonth}`,
+    actual: player ? `${medP90(player.pacing.firstKnockMonth)}, ${pct(player.pacing.firstKnockDesperate)} desperation first` : 'not run',
+    pass: player ? player.pacing.firstKnockMonth.med <= T.playerFirstKnockMonth : null,
+  });
+  out.push({
+    label: `tPlayer sees at least one investor card and one event card in ≥ ${pct(T.playerCardsShare)} of the rounds`,
+    actual: player ? `${pct(player.pacing.knockAndEvent)} (cards/run ${player.pacing.knocksPerRun.toFixed(1)}+${player.pacing.desperationsPerRun.toFixed(1)}+${player.pacing.eventsPerRun.toFixed(1)})` : 'not run',
+    pass: player ? player.pacing.knockAndEvent >= T.playerCardsShare : null,
+  });
+  out.push({
+    label: `tPlayer never waits more than ${T.playerCardGapSec} s for a card (p90 of the longest stretch without one)`,
+    actual: player ? `p90 ${num(player.pacing.cardGapSec.p90)} s (median ${num(player.pacing.cardGapSec.med)} s)` : 'not run',
+    pass: player ? player.pacing.cardGapSec.p90 <= T.playerCardGapSec : null,
+  });
+  // the buzzer is not a lottery on invoice timing: a fall is never growth, so the biggest fall measures the noise alone
+  const dropHorizon = horizon > T.playerMaxDropFromMonth;
+  out.push({
+    label: `tPlayer's value falls at most ${pct(T.playerMaxDropMax)} between two closes after month ${T.playerMaxDropFromMonth} (median of the biggest fall, surviving rounds)`,
+    actual: player ? (dropHorizon ? `median ${pct(player.pacing.maxDrop.med)} (p90 ${pct(player.pacing.maxDrop.p90)})` : `horizon ${horizon} ≤ ${T.playerMaxDropFromMonth} months`) : 'not run',
+    pass: player && dropHorizon && Number.isFinite(player.pacing.maxDrop.med) ? player.pacing.maxDrop.med <= T.playerMaxDropMax : null,
+  });
+  return out;
+}
+
+function printTargets(title: string, targets: Target[]): void {
+  console.log(`\n${title}`);
   const rows = targets.map((t) => [`  ${t.label}`, t.actual, t.pass === null ? 'n/a' : t.pass ? 'PASS' : 'FAIL']);
   console.log(table(rows));
 }
@@ -561,29 +811,43 @@ function main(): void {
     process.exitCode = 2;
     return;
   }
-  const strategies = args.strategy ? [STRATEGIES[args.strategy]] : [...strategyList];
+  const mode = args.full ? 'full' : 'tournament';
+  const months = args.months ?? DEFAULTS.months[mode];
+  const strategies = args.strategy ? [STRATEGIES[args.strategy]] : args.full ? [...engineStrategies] : [...tournamentStrategies];
   const seeds = Array.from({ length: args.seeds }, (_, i) => args.seedBase + i);
-  console.log(`BrightByte balance: ${strategies.map((s) => s.name).join(', ')} × ${args.seeds} seeds (${seeds[0]}..${seeds[seeds.length - 1]}) × ${args.months} months\n`);
+  console.log(`BrightByte balance (${args.full ? 'full engine' : 'tournament rules'}): ${strategies.map((s) => s.name).join(', ')} × ${args.seeds} seeds (${seeds[0]}..${seeds[seeds.length - 1]}) × ${months} months\n`);
 
-  const summaries: Summary[] = [];
+  const runs: { strategy: Strategy; rows: RunRow[]; seconds: number }[] = [];
   for (const strategy of strategies) {
     const t0 = performance.now();
-    const rows = runRows(strategy, seeds, args.months);
+    const rows = runRows(strategy, seeds, months);
     const seconds = (performance.now() - t0) / 1000;
-    summaries.push(summarize(strategy.name, rows, args.months, seconds));
+    runs.push({ strategy, rows, seconds });
     const errors = rows.filter((r) => r.status === 'error');
     if (errors.length > 0) {
       console.log(`${strategy.name}: ${errors.length} run(s) threw; first: seed ${errors[0].seed}: ${errors[0].error}`);
     }
   }
 
-  printTable(summaries, args.months);
-  printPacing(summaries);
-  printFiveYear(summaries, args.months);
-  const targets = evaluateTargets(summaries, args.months);
-  printTargets(targets);
+  let targets: Target[];
+  let errored: number;
+  if (args.full) {
+    const summaries = runs.map((r) => summarize(r.strategy.name, r.rows, months, r.seconds));
+    printTable(summaries, months);
+    printPacing(summaries);
+    printFiveYear(summaries, months);
+    targets = evaluateTargets(summaries, months);
+    printTargets('DESIGN.md 16 targets (full engine)', targets);
+    errored = summaries.reduce((n, s) => n + s.errors, 0);
+  } else {
+    const summaries = runs.map((r) => summarizeTournament(r.strategy.name, r.rows, months, r.seconds));
+    printTournamentTable(summaries, months);
+    printPacing(summaries);
+    targets = evaluateTournamentTargets(summaries, months);
+    printTargets('DESIGN.md 16 tournament targets', targets);
+    errored = summaries.reduce((n, s) => n + s.errors, 0);
+  }
   const failed = targets.filter((t) => t.pass === false).length;
-  const errored = summaries.reduce((n, s) => n + s.errors, 0);
   console.log(`\n${failed} target(s) failed, ${targets.filter((t) => t.pass === true).length} passed, ${targets.filter((t) => t.pass === null).length} not evaluated; ${errored} run(s) threw.`);
   if (args.strict && (failed > 0 || errored > 0)) process.exitCode = 1;
 }

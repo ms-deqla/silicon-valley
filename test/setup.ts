@@ -18,6 +18,8 @@ export function useFullEngine(): void {
   RULES.finance = true;
   RULES.rnd = true;
   RULES.adBudget = true;
+  RULES.founderRole = true;
+  RULES.sell = true;
   RULES.events = [...EVENT_TYPES];
 }
 
