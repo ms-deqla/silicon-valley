@@ -194,13 +194,15 @@ small { font-size: 11px; }
 .ls-chip.me .ls-rank { color: rgba(255, 255, 255, 0.7); }
 .ls-name { max-width: 64px; overflow: hidden; text-overflow: ellipsis; }
 .ls-val { font-weight: 800; font-variant-numeric: tabular-nums; }
-/* the mark after a number: "now" (a run still going), ✓ (sold), "out" (out of cash), "best" (an earlier run today) */
+/* the mark after a number: "now" (a run still going), ✓ (sold), "out" (out of cash), "best" (an earlier run today), "not posted" (a run the shared board never received) */
 .ls-mark, .lb-mark { font-size: 9px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
 .ls-mark.done, .lb-mark.done { font-size: 11px; letter-spacing: 0; color: var(--good); }
 .ls-mark.out, .lb-mark.out { color: var(--bad); }
+.ls-mark.local, .lb-mark.local { color: var(--warn); }
 .ls-chip.me .ls-mark { color: rgba(255, 255, 255, 0.75); }
 .ls-chip.me .ls-mark.done { color: #9fe0b7; }
 .ls-chip.me .ls-mark.out { color: #ffb3b0; }
+.ls-chip.me .ls-mark.local { color: #ffd38a; }
 .ls-best { font-size: 9.5px; color: var(--ink-3); white-space: nowrap; }
 .ls-chip.me .ls-best { color: rgba(255, 255, 255, 0.7); }
 .ls-gap, .ls-empty { font-size: 11px; color: var(--ink-3); white-space: nowrap; }

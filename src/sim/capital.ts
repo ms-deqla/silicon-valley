@@ -127,11 +127,17 @@ function repayAtMaturity(state: GameState, loan: Loan, text: string): void {
   state.visuals.push({ t: 'toast', day: state.day, text: `Loan repaid: ${fmtMoney(loan.principal)}`, tone: 'info' });
 }
 
-/** DESIGN.md 0: no scheduled knock in the last stretch of a round; money that arrives in the final month cannot be used. */
+/**
+ * DESIGN.md 0: no scheduled knock in the last stretch of a round; money that arrives in the final
+ * month cannot be used. The round ends when the shell says it does (schedule.roundEndDay: open
+ * cards cost game months, so the buzzer rings before the nominal day), or on the nominal
+ * RULES.roundMonths when nothing has projected the end (headless runs, replays). No round, no blackout.
+ */
 function scheduledKnockBlackout(state: GameState): boolean {
-  if (RULES.roundMonths === null) return false;
-  const roundDays = RULES.roundMonths * D;
-  return roundDays - state.day < RULES.lastKnockDays;
+  const nominalEnd = RULES.roundMonths === null ? null : RULES.roundMonths * D;
+  const endDay = state.schedule.roundEndDay ?? nominalEnd;
+  if (endDay === null) return false;
+  return endDay - state.day < RULES.lastKnockDays;
 }
 
 /** DESIGN.md 10: desperation knock when runway < 2 months, at most once per 60 days. */

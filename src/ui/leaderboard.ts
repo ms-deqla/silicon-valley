@@ -3,22 +3,32 @@
  * the artifact's shared store, readable by everyone and writable only by that
  * player (rules declared at publish: `scores` read 'view' / write 'owner',
  * `scores/{self}` write 'interact'). Reads come from one query subscription on the
- * current seed; writes are the full document, one in flight at a time, only when
- * something changed. Where the store is absent (local dev, a saved copy of the
- * page), the viewer is signed out, or the store refuses, the local player alone is
- * kept in localStorage and `shared` says so.
+ * current seed, opened by watch() (the start screen's preview of today's players)
+ * or by start(); writes are the full document, one in flight at a time, only when
+ * something changed.
  *
- * Every entry is ranked by one standing, `score`: what the buzzer would pay now
- * (value × founder share) while playing, the final score once finished, so a run out
- * of cash (0) sinks to the bottom. Each document also carries `best`, the player's best
- * finished score on the seed, kept across Play again and across page loads: the tables
- * rank by it.
+ * Two ways the shared store can fail this viewer, handled differently:
+ * - the store refuses a write (a view-only member, a cap, a revoked grant): the page
+ *   keeps reading the shared list, `canWrite` goes false so the caption says the run
+ *   is not posted, and the run is kept in localStorage so its best survives a reload;
+ * - the listener dies, or there is no store at all (local dev, a saved copy of the
+ *   page, a signed-out viewer): `shared` goes false, the local player alone is shown
+ *   from localStorage, and the caption says so.
  *
- * Nothing here touches sim state or the DOM: localStorage and timers are the only
- * browser APIs, and every localStorage call is wrapped. Names and numbers that come
- * back from the store are other people's input: validated here, and the shell
- * renders names with textContent.
+ * The live order (DESIGN.md 0): finished runs by score, then runs still going by
+ * company value, last the runs left mid-round (a 'playing' document not updated for
+ * two rounds, which cannot still be playing since the round clock never stops).
+ * DESIGN is silent on how finished and running runs interleave; finished first is the
+ * simplest rule that keeps a real score above a provisional value. Each document also
+ * carries `best`, the player's best finished score on the seed, kept across Play again
+ * and across page loads: the tables rank by it.
+ *
+ * Nothing here touches sim state or the DOM (RULES is read for the round length):
+ * localStorage and timers are the only browser APIs, and every localStorage call is
+ * wrapped. Names and numbers that come back from the store are other people's input:
+ * validated here, and the shell renders names with textContent.
  */
+import { RULES } from '../sim';
 
 export type LeaderStatus = 'playing' | 'sold' | 'dead';
 
@@ -28,7 +38,7 @@ export interface LeaderEntry {
   name: string;
   seed: number;
   value: number;
-  /** the standing: the final score once finished, value × founder share while playing */
+  /** the final score once finished; while playing, what the buzzer would pay now (value × founder share), posted for the record */
   score: number;
   /** the best finished score this player posted on this seed, across runs; 0 until a run finished */
   best: number;
@@ -37,6 +47,8 @@ export interface LeaderEntry {
   updatedAt: number;
   /** the local player */
   me: boolean;
+  /** a run left mid-round: a 'playing' document not updated for two rounds (derived here, never stored; never true for this page's own run) */
+  abandoned: boolean;
 }
 
 export interface LeaderUpdate {
@@ -51,19 +63,28 @@ export interface Leaderboard {
   readonly ready: Promise<void>;
   /** the shared store answers reads for this viewer */
   readonly shared: boolean;
-  /** this viewer can post (shared store writable, or the local fallback); false until `ready` resolves, and after the store refused a write */
+  /** this viewer can post (shared store writable, or the local fallback); false until `ready` resolves, and after the store refused a write (the run is then kept in this browser only) */
   readonly canWrite: boolean;
   /** the shared store has not confirmed the list within 10 s of subscribing (offline, blocked): what is shown may be out of date */
   readonly stale?: boolean;
   /**
+   * reads today's players before a run starts (the start screen's preview): opens the seed's
+   * query on the shared store, or shows this browser's stored run in the fallback; a later
+   * start() on the same seed keeps the listener
+   */
+  watch(seed: number): void;
+  /**
    * registers this player's run: status 'playing', value/score 0, month 0, `best` carried from this player's
-   * earlier runs on the seed (this page load's, else the stored document's, read before the first write);
-   * resolves once the run is registered, the shared write proceeds in the background
+   * earlier runs on the seed (this page load's, else the stored document's, read before the first write,
+   * else the copy kept in this browser); resolves once the run is registered, the shared write proceeds in the background
    */
   start(name: string, seed: number): Promise<void>;
   /** coalesced: at most one write in flight per document, the latest update wins, only when something changed; a finished score raises `best` */
   post(update: LeaderUpdate): void;
-  /** entries for the current seed, sorted by score desc (the live standing), ties by name; the local player flagged me=true; fires once with what is known and on every change */
+  /**
+   * entries for the current seed in the live order (compareEntries); the local player flagged me=true
+   * (this page's run, else this viewer's stored document); fires once with what is known and on every change
+   */
   subscribe(cb: (entries: LeaderEntry[]) => void): () => void;
   destroy(): void;
 }
@@ -83,6 +104,8 @@ const LOAD_TIMEOUT_MS = 10_000;
 const RETRY_DELAY_MS: readonly [number, number] = [250, 1_250];
 /** the read of this player's stored document at start() waits at most this long before the run is registered without it */
 const READ_TIMEOUT_MS = 5_000;
+/** a 'playing' document is counted as left mid-round after this many rounds without an update */
+const ABANDONED_AFTER_ROUNDS = 2;
 
 const STATUSES: readonly LeaderStatus[] = ['playing', 'sold', 'dead'];
 
@@ -130,12 +153,24 @@ function parseDoc(raw: unknown): ScoreDoc | null {
   };
 }
 
-function toEntry(id: string, d: ScoreDoc, me: boolean): LeaderEntry {
-  return { id, ...d, me };
-}
-
 function finished(status: LeaderStatus): boolean {
   return status !== 'playing';
+}
+
+/**
+ * DESIGN.md 0: the round clock never stops, so a 'playing' document this old was left
+ * mid-round; two rounds tolerate clock skew between players and a hidden tab's catch-up.
+ */
+function abandonedAfterMs(): number {
+  return RULES.roundSeconds * 1000 * ABANDONED_AFTER_ROUNDS;
+}
+
+function isAbandoned(d: ScoreDoc, now: number): boolean {
+  return d.status === 'playing' && now - d.updatedAt > abandonedAfterMs();
+}
+
+function toEntry(id: string, d: ScoreDoc, me: boolean, abandoned: boolean): LeaderEntry {
+  return { id, ...d, me, abandoned };
 }
 
 function compareNames(a: LeaderEntry, b: LeaderEntry): number {
@@ -143,13 +178,26 @@ function compareNames(a: LeaderEntry, b: LeaderEntry): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/** The number a run is ranked by live (DESIGN.md 0): its score once finished, its company value while playing. */
+export function standing(e: LeaderEntry): number {
+  return finished(e.status) ? e.score : e.value;
+}
+
+/** The live tiers: finished runs (real scores), then runs still going (provisional values), then runs left mid-round. */
+function tier(e: LeaderEntry): number {
+  return e.abandoned ? 2 : finished(e.status) ? 0 : 1;
+}
+
 /**
- * DESIGN.md 0, the live order: every run by what the buzzer would pay now (the score:
- * value × founder share while playing, the final score once finished), so a run out of
- * cash sinks to the bottom; ties by name, then id. Status is a flag, not a tier.
+ * DESIGN.md 0, the live order: finished runs by score, then runs still going by value
+ * (finished first is the rule chosen where DESIGN is silent: a real score outranks a
+ * provisional value), then runs left mid-round; within a tier by the standing desc,
+ * ties by name, then id.
  */
 export function compareEntries(a: LeaderEntry, b: LeaderEntry): number {
-  const d = b.score - a.score;
+  const t = tier(a) - tier(b);
+  if (t !== 0) return t;
+  const d = standing(b) - standing(a);
   if (d !== 0) return d;
   return compareNames(a, b);
 }
@@ -161,10 +209,12 @@ export function sortEntries(entries: readonly LeaderEntry[]): LeaderEntry[] {
 /**
  * The number the best-of-the-day tables rank by: a finished player's best score today
  * (which falls back to the score, so a document without `best` still counts); a run
- * still going by its standing, or by its earlier best when that is higher.
+ * still going by what the buzzer would pay now, or by its earlier best when that is
+ * higher; a run left mid-round by its earlier best alone, since its standing will never
+ * be realised.
  */
 export function bestOf(e: LeaderEntry): number {
-  return Math.max(e.best, e.score);
+  return e.abandoned ? e.best : Math.max(e.best, e.score);
 }
 
 /** The best-of-the-day order (start screen preview, result screen): bestOf desc, then the live order. */
@@ -216,6 +266,12 @@ function readLocal(): LocalStore {
   }
 }
 
+/** This browser's stored run on the seed, if any. */
+function localDoc(s: number): ScoreDoc | null {
+  const d = readLocal()[String(s)];
+  return d && d.seed === s ? d : null;
+}
+
 function writeLocal(seed: number, doc: ScoreDoc): void {
   try {
     if (typeof localStorage === 'undefined') return;
@@ -250,9 +306,14 @@ export function createLeaderboard(): Leaderboard {
   let stale = false;
   let destroyed = false;
 
-  /** this player's run: the freshest copy, ahead of whatever the store has */
+  /** this player's run on this page load: the freshest copy, ahead of whatever the store has */
   let me: ScoreDoc | null = null;
+  /** this viewer's document as the store (or, in the fallback, localStorage) holds it: shown as the local player until a run starts */
+  let mine: ScoreDoc | null = null;
+  /** the registered run's seed */
   let seed: number | null = null;
+  /** the seed watch() asked for */
+  let watched: number | null = null;
   /** bumped by every start() and by destroy(), so an older start's continuation steps aside */
   let generation = 0;
   /** the generation whose start() is still reading the stored document; writes wait for it (0: none) */
@@ -277,10 +338,18 @@ export function createLeaderboard(): Leaderboard {
     return mode === 'shared' && viewerId ? viewerId : LOCAL_ID;
   }
 
+  /** The seed the board shows: the registered run's, else the watched one. */
+  function viewSeed(): number | null {
+    return seed ?? watched;
+  }
+
   function current(): LeaderEntry[] {
+    const now = Date.now();
     const out: LeaderEntry[] = [];
-    if (mode === 'shared') for (const [id, d] of others) out.push(toEntry(id, d, false));
-    if (me) out.push(toEntry(myId(), me, true));
+    if (mode === 'shared') for (const [id, d] of others) out.push(toEntry(id, d, false, isAbandoned(d, now)));
+    // the local player: this page's run (live by definition), else this viewer's stored document
+    if (me) out.push(toEntry(myId(), me, true, false));
+    else if (mine) out.push(toEntry(myId(), mine, true, isAbandoned(mine, now)));
     return sortEntries(out);
   }
 
@@ -352,18 +421,25 @@ export function createLeaderboard(): Leaderboard {
     dirty = false;
     others = new Map();
     if (me && seed !== null) writeLocal(seed, me);
+    const s = viewSeed();
+    mine = s === null ? null : localDoc(s);
     emit();
   }
 
   function onSnap(snap: QuerySnapshot): void {
     if (destroyed || mode !== 'shared') return;
     const next = new Map<string, ScoreDoc>();
+    let own: ScoreDoc | null = null;
     for (const doc of snap.docs) {
-      if (!doc.exists || doc.id === viewerId) continue;
+      if (!doc.exists) continue;
       const d = parseDoc(doc.data());
-      if (d && d.seed === querySeed) next.set(doc.id, d);
+      if (!d || d.seed !== querySeed) continue;
+      if (doc.id === viewerId) own = d;
+      else next.set(doc.id, d);
     }
     others = next;
+    // this viewer's own document: the store's copy, else the one kept in this browser (a refused write, an earlier fallback)
+    mine = own ?? (querySeed === null ? null : localDoc(querySeed));
     if (!snap.metadata || !snap.metadata.fromCache) {
       confirmed = true;
       stale = false;
@@ -383,6 +459,7 @@ export function createLeaderboard(): Leaderboard {
     if (!db || (unsubscribeQuery && querySeed === s)) return;
     stopQuery();
     others = new Map();
+    mine = null;
     querySeed = s;
     let unsub: Unsubscribe;
     try {
@@ -412,9 +489,11 @@ export function createLeaderboard(): Leaderboard {
     }
   }
 
+  /** The store refused this viewer's writes: read-only from here on, the run kept in this browser so its best survives a reload. */
   function stopWriting(): void {
     canWrite = false;
     dirty = false;
+    if (me && seed !== null) writeLocal(seed, me);
     emit();
   }
 
@@ -522,6 +601,18 @@ export function createLeaderboard(): Leaderboard {
     }
   }
 
+  function watch(s: number): void {
+    if (destroyed) return;
+    watched = s;
+    void ready.then(() => {
+      // superseded by a later watch(), or a run registered meanwhile on another seed: the board follows that
+      if (destroyed || watched !== s || (seed !== null && seed !== s)) return;
+      if (mode === 'shared') ensureQuery(s);
+      else if (mode === 'local') mine = localDoc(s);
+      emit();
+    });
+  }
+
   async function start(name: string, s: number): Promise<void> {
     if (destroyed) return;
     const gen = ++generation;
@@ -541,14 +632,17 @@ export function createLeaderboard(): Leaderboard {
         const stored = await storedBest(s);
         if (registering === gen) registering = 0;
         if (destroyed || gen !== generation) return;
-        if (me && stored > me.best) me = { ...me, best: stored };
+        // a copy kept in this browser (a refused write, an earlier fallback) counts too
+        const kept = localDoc(s);
+        const best = Math.max(stored, kept ? kept.best : 0);
+        if (me && best > me.best) me = { ...me, best };
       }
     }
     if (mode === 'shared') {
       requestWrite();
     } else if (mode === 'local' && me) {
-      const stored = readLocal()[String(s)];
-      if (stored && stored.seed === s && stored.best > me.best) me = { ...me, best: stored.best };
+      const stored = localDoc(s);
+      if (stored && stored.best > me.best) me = { ...me, best: stored.best };
       writeLocal(s, me);
     }
     emit();
@@ -570,7 +664,8 @@ export function createLeaderboard(): Leaderboard {
     if (next.value === me.value && next.score === me.score && next.month === me.month && next.status === me.status && next.best === me.best) return;
     next.updatedAt = Date.now();
     me = next;
-    if (mode === 'local' && seed !== null) writeLocal(seed, me);
+    // the local fallback, and a shared store that refused this viewer's writes: the run lives in this browser
+    if (seed !== null && (mode === 'local' || (mode === 'shared' && !canWrite))) writeLocal(seed, me);
     emit();
     if (mode === 'shared') requestWrite();
   }
@@ -606,6 +701,7 @@ export function createLeaderboard(): Leaderboard {
     get stale() {
       return stale;
     },
+    watch,
     start,
     post,
     subscribe,

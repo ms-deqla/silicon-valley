@@ -1,7 +1,9 @@
 /**
  * The start screen (DESIGN.md 0): the title, the one-line premise, the player's name
  * (required, remembered in this browser), today's world (the daily seed), the rules in
- * five lines, a preview of today's players (the best-of-the-day table), and Start.
+ * five lines, a preview of today's players (the best-of-the-day table, watched on the
+ * leaderboard from the moment the screen mounts), and Start. The seed is the day the
+ * clock starts: the label and the preview follow the UTC date while the screen waits.
  */
 import { CONFIG, RULES, dailySeed } from '../sim';
 import { money } from './format';
@@ -16,6 +18,8 @@ export interface StartOptions {
 }
 
 const NAME_KEY = 'brightbyte.player.name.v1';
+/** The day-change timer fires this long after UTC midnight, so the clock is on the new date when it is read. */
+const MIDNIGHT_SLACK_MS = 1_000;
 
 function rememberedName(): string {
   try {
@@ -33,8 +37,24 @@ function rememberName(name: string): void {
   }
 }
 
+/** Milliseconds until the next UTC midnight, when the daily seed changes (DESIGN.md 0: one seed per day). */
+function msToNextUtcMidnight(now: Date): number {
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return Math.max(0, next - now.getTime());
+}
+
 export function mountStart(root: HTMLElement, leaderboard: Leaderboard, onStart: (opts: StartOptions) => void): () => void {
-  const seed = dailySeed(new Date());
+  let seed = dailySeed(new Date());
+  const seedEl = h('b', { class: 'mono', text: String(seed) });
+
+  /** DESIGN.md 0: one seed per day for all players, so the world is the day the clock starts, not the day the page opened. */
+  const syncSeed = (): void => {
+    const today = dailySeed(new Date());
+    if (today === seed) return;
+    seed = today;
+    seedEl.textContent = String(seed);
+    leaderboard.watch(seed);
+  };
 
   const nameInput = h('input', {
     class: 'input',
@@ -53,7 +73,7 @@ export function mountStart(root: HTMLElement, leaderboard: Leaderboard, onStart:
     h('label', { class: 'field' }, h('span', { text: 'Your name' }), nameInput, nameError),
     h('div', { class: 'world' },
       h('span', { text: "Today's world: " }),
-      h('b', { class: 'mono', text: String(seed) }),
+      seedEl,
       h('span', { class: 'caption', text: 'Everyone playing today gets the same world.' })),
     h('button', { class: 'btn primary start-btn', type: 'submit', text: 'Start the clock' }));
   form.addEventListener('submit', (ev) => {
@@ -65,6 +85,8 @@ export function mountStart(root: HTMLElement, leaderboard: Leaderboard, onStart:
       return;
     }
     rememberName(name);
+    // the seed of the moment the clock starts, and the label with it
+    syncSeed();
     onStart({ seed, name });
   });
 
@@ -83,6 +105,24 @@ export function mountStart(root: HTMLElement, leaderboard: Leaderboard, onStart:
     tableWrap.replaceChildren(leaderTable(entries));
   });
   const offCaption = watchCaption(leaderboard, caption, longCaption);
+  // the preview: today's players, live, before any run is registered
+  leaderboard.watch(seed);
+
+  // The date can roll over while the page waits here: a timer to the next UTC midnight (re-armed each
+  // day), and a check whenever the tab comes back, because a hidden tab's timers are throttled.
+  let midnight: ReturnType<typeof setTimeout> | null = null;
+  const armMidnight = (): void => {
+    midnight = setTimeout(() => {
+      syncSeed();
+      armMidnight();
+    }, msToNextUtcMidnight(new Date()) + MIDNIGHT_SLACK_MS);
+  };
+  armMidnight();
+  const onVisible = (): void => {
+    if (document.visibilityState === 'visible') syncSeed();
+  };
+  document.addEventListener('visibilitychange', onVisible);
+  window.addEventListener('focus', syncSeed);
 
   const screen = h('div', { class: 'start-screen' },
     h('div', { class: 'start-hero' },
@@ -94,6 +134,9 @@ export function mountStart(root: HTMLElement, leaderboard: Leaderboard, onStart:
   root.appendChild(screen);
 
   return () => {
+    if (midnight !== null) clearTimeout(midnight);
+    document.removeEventListener('visibilitychange', onVisible);
+    window.removeEventListener('focus', syncSeed);
     offCaption();
     unsubscribe();
     screen.remove();

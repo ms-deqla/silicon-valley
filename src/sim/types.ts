@@ -318,6 +318,12 @@ export interface Schedule {
   pendingSolvencyCheck: boolean;
   /** investor cards opened so far, any kind */
   knocks: number;
+  /**
+   * The game day the round will end on, as the shell projects it from the countdown
+   * (DESIGN.md 0: cards stop the game clock, not the countdown, so the buzzer rings before
+   * the nominal RULES.roundMonths). null: the nominal round, or no round at all.
+   */
+  roundEndDay: number | null;
 }
 
 // ---------------------------------------------------------------- visuals & log

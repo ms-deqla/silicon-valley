@@ -10,7 +10,7 @@ import { CONFIG, whyLine } from '../sim';
 import type { GameState, Result } from '../sim';
 import type { ShellController } from './controller';
 import { money, months, percent, plural } from './format';
-import { leaderTable, longCaption, watchCaption } from './leaderstrip';
+import { leaderTable, longCaption, unposted, watchCaption } from './leaderstrip';
 import { h } from './panels/dom';
 
 export interface ResultScreen {
@@ -74,7 +74,7 @@ export function createResult(controller: ShellController, layer: HTMLElement, ho
 
     const lb = controller.leaderboard;
     const offTable = lb.subscribe((entries) => {
-      tableWrap.replaceChildren(leaderTable(entries));
+      tableWrap.replaceChildren(leaderTable(entries, { unposted: unposted(lb) }));
     });
     const offCaption = watchCaption(lb, caption, longCaption);
     unsubscribe = () => {

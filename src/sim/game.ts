@@ -75,6 +75,7 @@ export function createGame(seed: number, opts: CreateOptions = {}): GameState {
       crisisKnockGiven: false,
       pendingSolvencyCheck: false,
       knocks: 0,
+      roundEndDay: null,
     },
     financeUnlocked: false,
     card: null,

@@ -3,9 +3,10 @@
  * implementing the db subset the module uses) and a Map-backed localStorage.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LOCAL_ID, createLeaderboard, sortEntries, sortEntriesByBest } from '../src/ui/leaderboard';
+import { RULES } from '../src/sim/config';
+import { LOCAL_ID, bestOf, createLeaderboard, sortEntries, sortEntriesByBest, standing } from '../src/ui/leaderboard';
 import type { LeaderEntry, Leaderboard } from '../src/ui/leaderboard';
-import { storeCaption } from '../src/ui/leaderstrip';
+import { entryAmount, entryStatus, storeCaption, unposted } from '../src/ui/leaderstrip';
 
 const SEED = 20261103;
 const KEY = 'brightbyte.tournament.v1';
@@ -153,7 +154,8 @@ const doc = (over: Partial<Record<string, unknown>> = {}): Record<string, unknow
   score: 0,
   month: 0,
   status: 'playing',
-  updatedAt: 1,
+  // fresh: a 'playing' document not updated for two rounds counts as left mid-round
+  updatedAt: Date.now(),
   ...over,
 });
 
@@ -229,7 +231,7 @@ describe('leaderboard on the shared store', () => {
     expect(fake.docs.get('scores/u1')).toMatchObject({ score: 150, status: 'sold' });
   });
 
-  it('subscribe sorts every run by its standing (score), playing or finished, and flags me', async () => {
+  it('subscribe sorts finished runs by score, then runs still going by value, and flags me', async () => {
     const fake = createFakeDb();
     fake.put('scores/u2', doc({ name: 'Sold', status: 'sold', score: 500, value: 10 }));
     fake.put('scores/u3', doc({ name: 'Dead', status: 'dead', score: 0, value: 999 }));
@@ -245,17 +247,17 @@ describe('leaderboard on the shared store', () => {
     await lb.start('Mike', SEED);
     await flush();
     const last = seen[seen.length - 1];
-    // 500, then the 450 tie by name, then the zeros (out of cash and a fresh start) by name
-    expect(last.map((e) => e.id)).toEqual(['u2', 'u6', 'u4', 'u3', 'u1']);
+    // finished first: 500, then out of cash (0); then the runs still going by value: the 900 tie by name, then the fresh start
+    expect(last.map((e) => e.id)).toEqual(['u2', 'u3', 'u6', 'u4', 'u1']);
     expect(last.map((e) => e.me)).toEqual([false, false, false, false, true]);
     expect(last.find((e) => e.me)).toMatchObject({ id: 'u1', name: 'Mike', seed: SEED, status: 'playing', value: 0, score: 0, best: 0 });
-    // a run still going tops a finished one when the buzzer would pay more now
+    // a run still going never tops a finished one, however much the buzzer would pay now; among runs still going, value orders
     lb.post({ value: 950, score: 900, month: 4, status: 'playing' });
     await flush();
-    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u1', 'u2', 'u6', 'u4', 'u3']);
-    // another player's change arrives live
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u2', 'u3', 'u1', 'u6', 'u4']);
+    // another player's change arrives live: a finish joins the finished tier
     fake.put('scores/u4', doc({ name: 'Beta', status: 'sold', score: 700 }));
-    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u1', 'u4', 'u2', 'u6', 'u3']);
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u4', 'u2', 'u3', 'u1', 'u6']);
     off();
     const count = seen.length;
     fake.put('scores/u6', doc({ name: 'Alpha', value: 1 }));
@@ -297,6 +299,120 @@ describe('leaderboard on the shared store', () => {
     await lb.start('Mike', SEED + 1);
     await flush();
     expect(fake.docs.get('scores/u1')).toMatchObject({ seed: SEED + 1, best: 0 });
+  });
+
+  it('watch shows today\'s players before a run starts; start on the same seed keeps the listener', async () => {
+    const fake = createFakeDb();
+    fake.put('scores/u2', doc({ name: 'Other', status: 'sold', score: 500, best: 500 }));
+    // this viewer's own run from an earlier page load today
+    fake.put('scores/u1', doc({ name: 'Mike', status: 'sold', score: 300, best: 300, month: 30 }));
+    fake.put('scores/u5', doc({ name: 'Elsewhere', score: 900, seed: SEED + 1 }));
+    stubViewer(fake);
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    lb.watch(SEED);
+    expect(seen).toEqual([[]]);
+    await lb.ready;
+    await flush();
+    expect(fake.setCalls).toBe(0);
+    expect(fake.listeners.size).toBe(1);
+    expect(seen[seen.length - 1].map((e) => [e.id, e.me, e.score])).toEqual([['u2', false, 500], ['u1', true, 300]]);
+    // another player arrives live: a run still going ranks after the finished ones
+    fake.put('scores/u3', doc({ name: 'New', value: 700, score: 700 }));
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u2', 'u1', 'u3']);
+    const [listener] = [...fake.listeners];
+    await lb.start('Mike', SEED);
+    await flush();
+    expect([...fake.listeners]).toEqual([listener]);
+    expect(fake.setCalls).toBe(1);
+    expect(fake.docs.get('scores/u1')).toMatchObject({ status: 'playing', score: 0, best: 300 });
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u2', 'u3', 'u1']);
+    expect(seen[seen.length - 1].find((e) => e.me)).toMatchObject({ status: 'playing', score: 0, best: 300 });
+  });
+
+  it('watch on another seed (the day rolled over) moves the preview without writing', async () => {
+    const fake = createFakeDb();
+    fake.put('scores/u2', doc({ name: 'Today', score: 10 }));
+    fake.put('scores/u3', doc({ name: 'Tomorrow', score: 20, seed: SEED + 1 }));
+    stubViewer(fake);
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    lb.watch(SEED);
+    await lb.ready;
+    await flush();
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u2']);
+    const [first] = [...fake.listeners];
+    lb.watch(SEED + 1);
+    await flush();
+    expect(fake.listeners.size).toBe(1);
+    expect([...fake.listeners][0]).not.toBe(first);
+    expect(seen[seen.length - 1].map((e) => e.id)).toEqual(['u3']);
+    expect(fake.setCalls).toBe(0);
+  });
+
+  it('a playing document not updated for two rounds counts as left mid-round: ranked last, its standing not a best', async () => {
+    vi.useFakeTimers();
+    const t0 = new Date('2026-11-03T12:00:00Z').getTime();
+    vi.setSystemTime(t0);
+    const fake = createFakeDb();
+    fake.put('scores/u2', doc({ name: 'Other', value: 900, score: 450, best: 400, month: 6 }));
+    // a finished document is never stale, however old
+    fake.put('scores/u3', doc({ name: 'Done', status: 'sold', score: 5, updatedAt: 1 }));
+    stubViewer(fake);
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    await lb.start('Mike', SEED);
+    await flush();
+    let last = seen[seen.length - 1];
+    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u3', false], ['u2', false], ['u1', false]]);
+    // two rounds pass without a word from u2: the round clock never stops, so that run was left
+    vi.setSystemTime(t0 + RULES.roundSeconds * 1000 * 2 + 1_000);
+    lb.post({ value: 100, score: 100, month: 1, status: 'playing' });
+    await flush();
+    last = seen[seen.length - 1];
+    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u3', false], ['u1', false], ['u2', true]]);
+    const left = last.find((e) => e.id === 'u2') as LeaderEntry;
+    expect(bestOf(left)).toBe(400);
+    expect(entryStatus(left)).toBe('Abandoned · month 6');
+    // its earlier best (400) still counts in the tables; its frozen standing does not
+    expect(sortEntriesByBest(last).map((e) => e.id)).toEqual(['u2', 'u1', 'u3']);
+    // the player comes back and posts again: live once more
+    fake.put('scores/u2', doc({ name: 'Other', value: 950, score: 475, best: 400, month: 7 }));
+    last = seen[seen.length - 1];
+    expect(last.map((e) => [e.id, e.abandoned])).toEqual([['u3', false], ['u2', false], ['u1', false]]);
+  });
+
+  it('a refused write keeps the run in this browser: the preview shows it after a reload and a new run carries its best', async () => {
+    const fake = createFakeDb();
+    fake.failSet = () => 'invalid_argument';
+    stubViewer(fake);
+    const lb = make();
+    await lb.start('Mike', SEED);
+    await flush();
+    expect(lb.canWrite).toBe(false);
+    const read = (): Record<string, unknown> => JSON.parse(localStorage.getItem(KEY) as string)[String(SEED)] as Record<string, unknown>;
+    expect(read()).toMatchObject({ name: 'Mike', seed: SEED, status: 'playing', score: 0 });
+    lb.post({ value: 200, score: 80, month: 3, status: 'sold' });
+    await flush();
+    expect(fake.setCalls).toBe(1); // nothing more is sent
+    expect(read()).toMatchObject({ status: 'sold', score: 80, best: 80 });
+    // a new page load: the store holds nothing for this viewer, so the kept run is the local player
+    const lb2 = make();
+    const seen: LeaderEntry[][] = [];
+    lb2.subscribe((entries) => seen.push(entries));
+    lb2.watch(SEED);
+    await lb2.ready;
+    await flush();
+    expect(seen[seen.length - 1]).toHaveLength(1);
+    expect(seen[seen.length - 1][0]).toMatchObject({ id: 'u1', me: true, status: 'sold', score: 80, best: 80 });
+    await lb2.start('Mike', SEED);
+    await flush();
+    expect(fake.bodies[fake.bodies.length - 1]).toMatchObject({ status: 'playing', score: 0, best: 80 });
+    expect(seen[seen.length - 1][0]).toMatchObject({ id: 'u1', me: true, status: 'playing', score: 0, best: 80 });
+    expect(lb2.canWrite).toBe(false);
   });
 
   it('a new page load reads the stored best before its first write, even with a post already waiting', async () => {
@@ -350,6 +466,9 @@ describe('leaderboard on the shared store', () => {
     expect(fake.setCalls).toBe(1);
     expect(lb.canWrite).toBe(false);
     expect(lb.shared).toBe(true);
+    // the page says the run is not on the board (DESIGN.md 0: viewers who may not write)
+    expect(unposted(lb)).toBe(true);
+    expect(storeCaption(lb)).toBe('Your run is not on the shared board');
     expect(fake.listeners.size).toBe(1);
     fake.put('scores/u2', doc({ name: 'Other', value: 10, score: 10 }));
     const last = seen[seen.length - 1];
@@ -504,7 +623,7 @@ describe('leaderboard without the shared store', () => {
     expect(stored[String(SEED)]).toEqual({ name: 'Mike', seed: SEED, value: 120, score: 90, best: 0, month: 2, status: 'playing', updatedAt: expect.any(Number) });
     const last = seen[seen.length - 1];
     expect(last).toHaveLength(1);
-    expect(last[0]).toEqual({ id: LOCAL_ID, me: true, ...stored[String(SEED)] });
+    expect(last[0]).toEqual({ id: LOCAL_ID, me: true, abandoned: false, ...stored[String(SEED)] });
     lb.post({ value: 120, score: 60, month: 2, status: 'dead' });
     expect(JSON.parse(localStorage.getItem(KEY) as string)[String(SEED)]).toMatchObject({ status: 'dead', score: 60, best: 60 });
   });
@@ -528,6 +647,26 @@ describe('leaderboard without the shared store', () => {
     expect(seen[seen.length - 1][0]).toMatchObject({ id: LOCAL_ID, me: true, best: 80 });
     lb2.post({ value: 300, score: 150, month: 4, status: 'sold' });
     expect(read()).toMatchObject({ score: 150, best: 150 });
+  });
+
+  it('watch shows this browser\'s stored run on the seed before a run starts', async () => {
+    const stored = { name: 'Mike', seed: SEED, value: 100, score: 80, best: 80, month: 3, status: 'sold', updatedAt: 1 };
+    localStorage.setItem(KEY, JSON.stringify({ [String(SEED)]: stored }));
+    const lb = make();
+    const seen: LeaderEntry[][] = [];
+    lb.subscribe((entries) => seen.push(entries));
+    lb.watch(SEED);
+    await lb.ready;
+    await flush();
+    expect(seen[seen.length - 1]).toEqual([{ id: LOCAL_ID, me: true, abandoned: false, ...stored }]);
+    lb.watch(SEED + 1);
+    await flush();
+    expect(seen[seen.length - 1]).toEqual([]);
+    lb.watch(SEED);
+    await flush();
+    await lb.start('Mike', SEED);
+    expect(seen[seen.length - 1]).toHaveLength(1);
+    expect(seen[seen.length - 1][0]).toMatchObject({ id: LOCAL_ID, me: true, status: 'playing', score: 0, best: 80 });
   });
 
   it('a signed-out viewer with a store is local too', async () => {
@@ -580,9 +719,9 @@ describe('leaderboard without the shared store', () => {
 });
 
 describe('sortEntries', () => {
-  const entry = (over: Partial<LeaderEntry>): LeaderEntry => ({ id: 'x', name: 'x', seed: SEED, value: 0, score: 0, best: 0, month: 0, status: 'playing', updatedAt: 0, me: false, ...over });
+  const entry = (over: Partial<LeaderEntry>): LeaderEntry => ({ id: 'x', name: 'x', seed: SEED, value: 0, score: 0, best: 0, month: 0, status: 'playing', updatedAt: 0, me: false, abandoned: false, ...over });
 
-  it('every run by score, status only a flag, ties by name then id', () => {
+  it('finished runs first by score, then runs still going by value, then runs left mid-round; ties by name then id', () => {
     const sorted = sortEntries([
       entry({ id: 'a', name: 'A', value: 200, score: 100 }),
       entry({ id: 'b', name: 'B', value: 900, score: 900 }),
@@ -590,11 +729,15 @@ describe('sortEntries', () => {
       entry({ id: 'd', name: 'D', status: 'sold', score: 50 }),
       entry({ id: 'e', name: 'B', value: 900, score: 900 }),
       entry({ id: 'f', name: 'A', value: 1800, score: 900 }),
+      entry({ id: 'g', name: 'G', value: 9000, score: 9000, abandoned: true }),
+      entry({ id: 'h', name: 'H', value: 10, score: 10, abandoned: true }),
     ]);
-    expect(sorted.map((e) => e.id)).toEqual(['f', 'b', 'e', 'a', 'd', 'c']);
+    // a finished 50 and a finished 0 above every value; then 1800, the 900 tie by name then id, 200; the runs left mid-round last, by value
+    expect(sorted.map((e) => e.id)).toEqual(['d', 'c', 'f', 'b', 'e', 'a', 'g', 'h']);
+    expect(sorted.map(standing)).toEqual([50, 0, 1800, 900, 900, 200, 9000, 10]);
   });
 
-  it('the tables rank by the best of the day: a finished player\'s best (or score), a run still going by the higher of its standing and its earlier best', () => {
+  it('the tables rank by the best of the day: a finished player\'s best (or score), a run still going by the higher of its standing and its earlier best, a run left mid-round by its earlier best alone', () => {
     const sorted = sortEntriesByBest([
       entry({ id: 'a', name: 'A', score: 100 }),
       entry({ id: 'b', name: 'B', score: 200, best: 800 }),
@@ -602,9 +745,17 @@ describe('sortEntries', () => {
       entry({ id: 'd', name: 'D', status: 'sold', score: 500, best: 500 }),
       entry({ id: 'e', name: 'E', status: 'sold', score: 50 }),
       entry({ id: 'f', name: 'F', score: 300 }),
+      entry({ id: 'g', name: 'G', score: 700, best: 350, abandoned: true }),
     ]);
-    // the 300 tie (an earlier best vs a standing) breaks like the live order: by score
-    expect(sorted.map((e) => e.id)).toEqual(['b', 'd', 'f', 'c', 'a', 'e']);
+    // the 300 tie (a finished best vs a standing) breaks like the live order: finished first; g's frozen 700 does not count, its 350 does
+    expect(sorted.map((e) => e.id)).toEqual(['b', 'd', 'g', 'c', 'f', 'a', 'e']);
+    expect(sorted.map(bestOf)).toEqual([800, 500, 350, 300, 300, 100, 50]);
+  });
+
+  it('the words: a run left mid-round reads as abandoned, and the amount is the value while playing, the score once finished', () => {
+    expect(entryStatus(entry({ month: 7, abandoned: true }))).toBe('Abandoned · month 7');
+    expect(entryStatus(entry({ month: 7 }))).toBe('Playing · month 7');
+    expect(entryAmount(entry({ value: 1234, score: 600 }))).toBe(entryAmount(entry({ status: 'sold', value: 0, score: 1234 })));
   });
 });
 
@@ -612,10 +763,15 @@ describe('storeCaption', () => {
   const lb = (over: Partial<Pick<Leaderboard, 'shared' | 'canWrite' | 'stale'>>): Leaderboard =>
     ({ shared: true, canWrite: true, stale: false, ...over }) as unknown as Leaderboard;
 
-  it('says when the list is local, unavailable or may be out of date', () => {
+  it('says when the list is local, unavailable, not carrying this run, or may be out of date', () => {
     expect(storeCaption(lb({}))).toBe('');
     expect(storeCaption(lb({ stale: true }))).toBe('Leaderboard may be out of date');
     expect(storeCaption(lb({ shared: false, stale: true }))).toBe('Local only');
     expect(storeCaption(lb({ shared: false, canWrite: false }))).toBe('Leaderboard unavailable');
+    expect(storeCaption(lb({ canWrite: false }))).toBe('Your run is not on the shared board');
+    expect(storeCaption(lb({ canWrite: false, stale: true }))).toBe('Your run is not on the shared board');
+    expect(unposted(lb({ canWrite: false }))).toBe(true);
+    expect(unposted(lb({}))).toBe(false);
+    expect(unposted(lb({ shared: false, canWrite: false }))).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { customerName, days, dueText, money, moneyFull, months, percent, signedMoney, skillText } from '../src/ui/format';
+import { customerName as simCustomerName } from '../src/sim/events';
 
 describe('format.money', () => {
   it('formats thousands and millions the HUD way', () => {
@@ -47,10 +48,15 @@ describe('format.percent / months / days', () => {
     expect(dueText(100, 100)).toBe('due today');
     expect(dueText(100, 103)).toBe('late by 3 days');
   });
-  it('skill and customer names are stable', () => {
+  it('skill text', () => {
     expect(skillText(3.5)).toBe('3.5');
     expect(skillText(4)).toBe('4');
-    expect(customerName('c12')).toBe(customerName('c12'));
-    expect(customerName('c12')).toMatch(/#12$/);
+  });
+  it('names a customer the way the sim\'s cards and log lines do, so the Books tray matches the late-payer card', () => {
+    for (const id of ['c1', 'c12', 'c57', 'c123', 'c4096']) {
+      expect(customerName(id)).toBe(customerName(id));
+      expect(customerName(id)).toBe(simCustomerName(id));
+    }
+    expect(customerName('c12')).not.toMatch(/#/);
   });
 });

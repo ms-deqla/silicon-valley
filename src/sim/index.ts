@@ -1,7 +1,7 @@
 export * from './types';
 export { CONFIG, RULES } from './config';
 export type { Rules } from './config';
-export { headcount, setupCost, roomRentForHire } from './tournament';
+export { headcount, lastHire, setupCost, roomRentForHire } from './tournament';
 export { createGame, advanceDay, advanceTo, closeMonth, dispatch, canDispatch, replay, solvencyCheck } from './game';
 export * as selectors from './selectors';
 export * as ledger from './ledger';
@@ -9,5 +9,6 @@ export { catalogue } from './assets';
 export { validSpots, roomFootprint, roomRent } from './rooms';
 export { moraleTarget } from './staff';
 export { whyLine, hintLine } from './hints';
+export { customerName } from './events';
 export { scorePreview } from './exit';
 export { dailySeed, hashSeed } from './rng';

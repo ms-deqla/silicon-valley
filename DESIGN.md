@@ -19,7 +19,8 @@ stay in the code and the tests but never reach the screen. Decided with the owne
 - **The round.** A 10:00 wall-clock countdown that never stops. Game time runs at a
   fixed one month per 20 seconds (30 game months in a round, two and a half years).
   No pause, no speed buttons. Investor and event cards stop the game clock, not the
-  countdown: a slow decision costs game months. Switching tabs costs the same.
+  countdown: a slow decision costs game months. Leaving the tab costs attention, not
+  months: the game catches up to the wall clock when you return (see Clock details).
 - **Same world for everyone.** One seed per day (YYYYMMDD) for all players.
 - **Score** = company value × the founder's remaining share, taken when the countdown
   reaches zero (the buzzer sells the company). Running out of cash scores 0.

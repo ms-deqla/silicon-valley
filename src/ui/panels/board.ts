@@ -6,8 +6,8 @@
  * every state change; a disabled button keeps taking taps so it can say why (the sim's
  * reason, as a toast).
  */
-import { CONFIG, ROLE_JOB, ROLE_LABEL, RULES, headcount, roomRentForHire, selectors, setupCost } from '../../sim';
-import type { Action, GameState, Person, Role, Verdict } from '../../sim';
+import { CONFIG, ROLE_JOB, ROLE_LABEL, RULES, headcount, lastHire, roomRentForHire, selectors, setupCost } from '../../sim';
+import type { Action, GameState, Role, Verdict } from '../../sim';
 import type { ShellController } from '../controller';
 import { money, plural } from '../format';
 import { h } from './dom';
@@ -55,16 +55,6 @@ function gatedButton(controller: ShellController, cls: string, ariaLabel: string
       el.setAttribute('aria-disabled', next.verdict.ok ? 'false' : 'true');
     },
   };
-}
-
-/** The person fireRole would let go: the most recent hire in the department (same order as tournament.ts). */
-function lastHire(state: GameState, role: Role): Person | null {
-  let best: Person | null = null;
-  for (const p of state.people) {
-    if (p.founder || p.role !== role) continue;
-    if (!best || p.hiredDay > best.hiredDay || (p.hiredDay === best.hiredDay && p.id > best.id)) best = p;
-  }
-  return best;
 }
 
 function jobWord(role: Role): string {

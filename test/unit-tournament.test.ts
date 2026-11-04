@@ -245,6 +245,31 @@ describe('hireRole (DESIGN 0: one fixed hire per department, auto-provisioned)',
     expect(canDispatch(s, { type: 'buyDemoRoom' })).toEqual({ ok: false, reason: 'No space left on the lot.' });
   });
 
+  it('setupCost and roomRentForHire describe the seat the hire would get whatever the cash: short of cash, the garage\'s spare desk is still a desk, not a room', () => {
+    const s = game();
+    s.cash = 500;
+    expect(tournament.setupCost(s, 'product')).toBe(A.desk.price + A.laptop.price);
+    expect(tournament.roomRentForHire(s, 'product')).toBe(0);
+    const needed = RULES.hire.product.salary + A.desk.price + A.laptop.price;
+    expect(canDispatch(s, hire('product'))).toEqual({ ok: false, reason: `Not enough cash: ${fmtMoney(needed)} for the first month and the setup.` });
+
+    // the same hire with the cash: the garage desk, no room, no rent, as the caption said
+    s.cash = needed;
+    expect(tournament.roomRentForHire(s, 'product')).toBe(0);
+    act(s, hire('product'));
+    expect(s.rooms.map((r) => r.kind)).toEqual(['garage']);
+    expect(S.monthlyRent(s)).toBe(0);
+    expect(staff(s)[0].roomId).toBe('garage');
+
+    // the garage is full now: the next engineer needs a room, with or without the money for it
+    s.cash = 500;
+    expect(tournament.roomRentForHire(s, 'product')).toBe(SMALL.rent);
+    expect(canDispatch(s, hire('product')).ok).toBe(false);
+    s.cash = 1_000_000;
+    expect(tournament.roomRentForHire(s, 'product')).toBe(SMALL.rent);
+    expect(canDispatch(s, hire('product'))).toEqual({ ok: true });
+  });
+
   it('under the full engine Finance (once unlocked, DESIGN 8) and R&D are departments like any other', () => {
     useFullEngine();
     const s = game();
@@ -335,8 +360,42 @@ describe('fireRole (DESIGN 0: the most recent hire leaves with three months of s
     expect(S.monthlyRent(s)).toBe(2 * SMALL.rent);
   });
 
+  it('of two hires on the same day the later one leaves, even when their ids straddle a power of ten (hire order, not id text)', () => {
+    const s = game();
+    s.nextId = 95;
+    act(s, hire('product')); // the garage's spare desk
+    act(s, hire('product')); // the Product room: its id has one digit more
+    const [first, second] = staff(s);
+    expect(first.hiredDay).toBe(second.hiredDay);
+    expect(Number(second.id.slice(1))).toBeGreaterThan(Number(first.id.slice(1)));
+    expect(second.id < first.id).toBe(true); // as text the later id sorts first: the case this test is about
+    const [room] = roomsOf(s, 'product');
+    expect(first.roomId).toBe('garage');
+    expect(second.roomId).toBe(room.id);
+    // the board's "−" tooltip names the person from the same function, so it can never disagree with the sim
+    expect(tournament.lastHire(s, 'product')).toBe(second);
+
+    act(s, fire('product'));
+
+    expect(staff(s).map((p) => p.id)).toEqual([first.id]);
+    expect(tournament.lastHire(s, 'product')).toBe(first);
+    expect(s.visuals.some((v) => v.t === 'leave' && v.personId === second.id && v.reason === 'fired')).toBe(true);
+    expect(s.visuals.some((v) => v.t === 'leave' && v.personId === first.id)).toBe(false);
+    // the Product room's desk is the one freed, not the garage's: the next hire reuses it, no capex, no new room
+    expect(S.freeSeatsIn(s, 'garage')).toBe(0);
+    expect(S.freeSeatsIn(s, room.id)).toBe(1);
+    expect(tournament.setupCost(s, 'product')).toBe(0);
+    expect(tournament.roomRentForHire(s, 'product')).toBe(0);
+    const capex = s.book.cf.capex;
+    act(s, hire('product'));
+    expect(s.book.cf.capex).toBe(capex);
+    expect(roomsOf(s, 'product')).toHaveLength(1);
+    expect(staff(s)[1].roomId).toBe(room.id);
+  });
+
   it('refuses when nobody works in the department and never touches the founder', () => {
     const s = game();
+    expect(tournament.lastHire(s, 'product')).toBeNull();
     expect(canDispatch(s, fire('product'))).toEqual({ ok: false, reason: 'Nobody to let go.' });
     expect(dispatch(s, fire('product')).ok).toBe(false);
     expect(s.people).toHaveLength(1);
@@ -640,6 +699,75 @@ describe('the published ruleset (DESIGN 0: switched off)', () => {
     act(s, { type: 'debug', op: 'knock' });
     expect(s.card?.body).toMatch(/lend it at/);
     expect(s.log[s.log.length - 1].text).toMatch(/or a loan at/);
+  });
+});
+
+// ---------------------------------------------------------------- the last month of the round
+
+describe('the last month of the round (DESIGN 0: no scheduled knock opens in the last 30 game days; lifelines still do)', () => {
+  const ROUND_DAYS = ROUND_MONTHS * D;
+  /** the first day on which fewer than lastKnockDays remain before the nominal end */
+  const firstBlackoutDay = ROUND_DAYS - RULES.lastKnockDays + 1;
+
+  it('without a projected end the nominal round counts: a knock due with 30 days left opens, one due a day later never does', () => {
+    const s = game();
+    expect(s.schedule.roundEndDay).toBeNull();
+    s.schedule.nextKnockDay = firstBlackoutDay - 1;
+    advanceTo(s, ROUND_DAYS);
+    expect(s.day).toBe(firstBlackoutDay - 1);
+    expect(s.card?.kind).toBe('knock');
+    act(s, { type: 'card', choiceId: 'decline' });
+    expect(s.schedule.knocks).toBe(1);
+
+    s.schedule.nextKnockDay = firstBlackoutDay;
+    advanceTo(s, ROUND_DAYS);
+    expect(s.day).toBe(ROUND_DAYS);
+    expect(s.card).toBeNull();
+    expect(s.schedule.knocks).toBe(1);
+    expect(s.status).toBe('playing');
+  });
+
+  it('with the end the shell projects (open cards cost game months) the last 30 days are the last 30 the player gets', () => {
+    // two game months went to open cards: the buzzer rings on day 840, not 900
+    const end = ROUND_DAYS - 2 * D;
+
+    // due 5 days before the real end (65 before the nominal one): never opens
+    const s = game();
+    s.schedule.roundEndDay = end;
+    s.schedule.nextKnockDay = end - 5;
+    advanceTo(s, end);
+    expect(s.day).toBe(end);
+    expect(s.card).toBeNull();
+    expect(s.schedule.knocks).toBe(0);
+
+    // due with exactly 30 days left before the real end: opens
+    const t = game();
+    t.schedule.roundEndDay = end;
+    t.schedule.nextKnockDay = end - RULES.lastKnockDays;
+    advanceTo(t, end);
+    expect(t.day).toBe(end - RULES.lastKnockDays);
+    expect(t.card?.kind).toBe('knock');
+  });
+
+  it('a lifeline still opens inside the blackout', () => {
+    const s = game();
+    act(s, hire('product'));
+    // the shell projects a short round: from day 11 on fewer than 30 days remain
+    const end = RULES.lastKnockDays + 10;
+    s.schedule.roundEndDay = end;
+    s.schedule.nextKnockDay = 15;
+    advanceTo(s, 20);
+    expect(s.day).toBe(20);
+    expect(s.card).toBeNull();
+    expect(s.schedule.knocks).toBe(0);
+
+    // DESIGN.md 10: the lifeline comes only after investors knocked once on their own schedule
+    s.schedule.knocks = 1;
+    s.schedule.nextKnockDay = FAR;
+    s.cash = RULES.hire.product.salary; // one month of runway: under the two the lifeline needs
+    advanceDay(s);
+    expect(s.card?.kind).toBe('desperation');
+    expect(s.day).toBe(21);
   });
 });
 

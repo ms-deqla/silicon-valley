@@ -4,7 +4,10 @@
  * no speeds; game time is tied to the round clock, so a tab that was hidden catches up
  * when it returns), the ten-minute deadline and the buzzer, the leaderboard posts, and
  * the UI-only room highlight. Nothing in the UI mutates the sim except through
- * dispatch() here (CONTRIBUTING.md 7, DESIGN.md 14).
+ * dispatch() here (CONTRIBUTING.md 7, DESIGN.md 14), with one exception that belongs to
+ * the clock rather than to the player: the day the round will end on
+ * (state.schedule.roundEndDay), which the sim's last-month knock blackout is measured
+ * against (DESIGN.md 0).
  */
 import { CONFIG, RULES, advanceDay, canDispatch, createGame, dispatch as simDispatch } from '../sim';
 import type { Action, Card, GameState, Status, Verdict, VisualEvent } from '../sim';
@@ -142,6 +145,19 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
   }
 
   /**
+   * DESIGN.md 0: no scheduled knock opens in the last 30 game days of the round, and the
+   * round ends at the buzzer, which rings before the nominal 30 months whenever a card
+   * cost game months. The sim is told the day it will ring on: today plus the days still
+   * to be played, the backlog (a hidden tab's unplayed days) and the wall clock left before
+   * the deadline. Each simulated day moves one day from the backlog into state.day, so one
+   * projection per tick holds through the frame's loop. Not an action, so not in the
+   * action log: a replay() of a live round measures the blackout against the nominal end.
+   */
+  function projectRoundEnd(): void {
+    state.schedule.roundEndDay = state.day + Math.floor((backlog + Math.max(0, deadline - clockedAt)) / DAY_MS);
+  }
+
+  /**
    * Game time is tied to the round clock (DESIGN.md 0: the clock never stops). The
    * wall-clock ms since the last tick, up to the deadline, join the backlog, which is
    * simulated at most MAX_DAYS_PER_FRAME days per frame: a tab that was hidden catches
@@ -164,9 +180,11 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
     // A card stops game time (advanceDay refuses to move anyway); the deadline keeps running.
     if (state.card) {
       backlog = 0;
+      projectRoundEnd();
       return now >= deadline ? buzzer() : false;
     }
     backlog += elapsed;
+    projectRoundEnd();
     let days = 0;
     while (backlog >= DAY_MS && days < MAX_DAYS_PER_FRAME) {
       advanceDay(state);

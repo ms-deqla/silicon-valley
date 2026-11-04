@@ -103,15 +103,9 @@ export function hashText(text: string): number {
   return h >>> 0;
 }
 
-const CUSTOMER_NAMES = [
-  'Northwind', 'Globex', 'Initech', 'Hooli', 'Vandelay', 'Acme', 'Stark', 'Wayne', 'Umbrella', 'Tyrell',
-  'Aperture', 'Cyberdyne', 'Dunder', 'Oscorp', 'Wonka', 'Soylent', 'Massive', 'Pied Piper', 'Gringotts', 'Bluth',
-  'Sterling', 'Prestige', 'Octan', 'Monarch', 'Zorg', 'Virtucon', 'Oceanic', 'Nakatomi', 'Weyland', 'Gekko',
-];
-
-/** Cosmetic customer name derived from its id (deterministic, UI only). */
-export function customerName(id: string): string {
-  const n = CUSTOMER_NAMES[hashText(id) % CUSTOMER_NAMES.length];
-  const num = id.replace(/\D/g, '');
-  return num ? `${n} #${num}` : n;
-}
+/**
+ * A customer's name: the one the sim's cards and log lines use, so the Books invoice
+ * tray names the late payer exactly as the card did. One naming function for the whole
+ * screen.
+ */
+export { customerName } from '../sim';
