@@ -78,6 +78,21 @@ export function skillText(skill: number): string {
   return trim1(skill);
 }
 
+/** 2 → "2 engineers", 1 → "1 engineer", 0 → "0 engineers". */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * The round countdown as m:ss from milliseconds (DESIGN.md 0), rounded up so the
+ * display reads 10:00 at the start and 0:01 until the clock really hits zero.
+ */
+export function clock(ms: number): string {
+  const s = Math.max(0, Math.ceil((Number.isFinite(ms) ? ms : 0) / 1000));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
+}
+
 /** Stable 32-bit FNV-1a hash for cosmetic choices (names, blob shapes). Not game randomness. */
 export function hashText(text: string): number {
   let h = 2166136261;

@@ -1,17 +1,16 @@
 /**
- * The card modal (investor knocks, events, loan maturity) and the result screen
- * (sold / game over). DESIGN.md sections 10–13. The clock is stopped by the sim
- * while a card is open; the player can hide the card to look around and re-open it.
+ * The card modal: investor knocks and events (DESIGN.md sections 10, 11, 13). The sim
+ * stops game time while a card is open; the ten-minute countdown does not (DESIGN.md 0),
+ * and the card's footer says so. The player can hide a card to check the Books and
+ * re-open it from the waiting chip. The result screen lives in ./result.
  */
-import { selectors } from '../sim';
-import type { Card, GameState, Result } from '../sim';
+import type { Card, GameState } from '../sim';
 import type { ShellController } from './controller';
-import { hashText, money, months, percent } from './format';
-import { loadLeaderboard, renderLeaderboard, saveToLeaderboard } from './leaderboard';
+import { hashText } from './format';
 import { h, svg } from './panels/dom';
 
 export interface CardsUi {
-  /** Show the card modal / result screen when state calls for it. */
+  /** Show the card modal when state calls for it. */
   update(state: GameState): void;
   /** Re-open a card the player hid. */
   show(): void;
@@ -87,15 +86,18 @@ export function portrait(card: Card): SVGElement {
   return el;
 }
 
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
+function kindLabel(card: Card): string {
+  switch (card.kind) {
+    case 'event': return 'Event';
+    case 'maturity': return 'The bank';
+    case 'desperation': return 'Last resort';
+    default: return 'Investor';
+  }
 }
 
 export function createCards(controller: ShellController, layer: HTMLElement): CardsUi {
   let shownCardId: string | null = null;
   let hiddenCardId: string | null = null;
-  let shownResult: Result | null = null;
-  let saved = false;
   const modal = h('div', { class: 'modal-backdrop' });
 
   function renderCard(card: Card): void {
@@ -111,18 +113,20 @@ export function createCards(controller: ShellController, layer: HTMLElement): Ca
       c.disabled && c.reason ? h('span', { class: 'vreason', text: c.reason }) : null);
       choices.appendChild(btn);
     }
-    const hideable = card.kind !== 'gameOver' && card.kind !== 'sold';
     modal.replaceChildren(h('div', { class: 'modal card', attrs: { role: 'dialog', 'aria-modal': 'true' } },
       h('div', { class: 'card-top' },
         portrait(card),
         h('div', { class: 'card-titles' },
-          h('div', { class: 'card-kind', text: card.kind === 'event' ? 'Event' : card.kind === 'maturity' ? 'The bank' : card.kind === 'desperation' ? 'Last resort' : 'Investor' }),
+          h('div', { class: 'card-kind', text: kindLabel(card) }),
           h('h2', { class: 'card-title', text: card.title }),
           card.speaker ? h('div', { class: 'card-speaker', text: card.speaker }) : null)),
       card.quote ? h('blockquote', { class: 'card-quote', text: `“${card.quote}”` }) : null,
       h('p', { class: 'card-body', text: card.body }),
       choices,
-      hideable ? h('button', { class: 'link', type: 'button', text: 'Look around first (the clock stays stopped)', onClick: () => hide(card.id) }) : null));
+      // DESIGN.md 0: cards stop the game clock, not the countdown; a slow decision costs game months.
+      h('div', { class: 'card-foot' },
+        h('span', { class: 'card-clock-note', text: 'Game time is stopped while this card waits. The countdown is not.' }),
+        h('button', { class: 'link', type: 'button', text: 'Look around first', onClick: () => hide(card.id) }))));
   }
 
   function hide(cardId: string): void {
@@ -131,65 +135,8 @@ export function createCards(controller: ShellController, layer: HTMLElement): Ca
     modal.remove();
   }
 
-  function renderResult(state: GameState, result: Result): void {
-    modal.className = `modal-backdrop kind-${result.kind}`;
-    const sold = result.kind === 'sold';
-    const name = h('input', { class: 'input', type: 'text', placeholder: 'Your name', value: '', attrs: { maxlength: '24', 'aria-label': 'Name for the leaderboard' } });
-    const lbWrap = h('div', { class: 'lb-wrap' }, renderLeaderboard(loadLeaderboard()));
-    const saveBtn = h('button', { class: 'btn primary', type: 'button', text: 'Save to leaderboard', onClick: () => {
-      if (saved) return;
-      saved = true;
-      const list = saveToLeaderboard({
-        name: name.value.trim() || 'Anonymous',
-        score: result.score,
-        seed: state.seed,
-        date: new Date().toISOString(),
-        months: state.history.length,
-        company: state.companyName,
-      });
-      lbWrap.replaceChildren(renderLeaderboard(list));
-      saveBtn.textContent = 'Saved';
-      saveBtn.disabled = true;
-      name.disabled = true;
-    } });
-    const monthsPlayed = state.history.length;
-    modal.replaceChildren(h('div', { class: 'modal result', attrs: { role: 'dialog', 'aria-modal': 'true' } },
-      h('div', { class: 'result-emblem', text: sold ? '🏁' : '💸' }),
-      h('h2', { class: 'result-headline', text: sold ? `You sold ${state.companyName}` : 'Game over' }),
-      h('p', { class: 'result-reason', text: result.reason }),
-      h('div', { class: 'result-grid' },
-        stat('Offer', money(result.offer)),
-        stat('Your share', percent(result.founderShare, 1)),
-        stat('Debt', money(result.debt)),
-        stat('Score', money(result.score), 'big'),
-        stat('Months played', String(monthsPlayed)),
-        stat('Ended', selectors.calendar(result.day).label)),
-      h('p', { class: 'note muted', text: `${monthsPlayed > 0 ? months(monthsPlayed) : 'Less than a month'} · seed ${state.seed} · ${plural(state.customers.length, 'customer')} · ${plural(state.people.length, 'person', 'people')} at the end.` }),
-      h('div', { class: 'save-row' }, name, saveBtn),
-      lbWrap,
-      h('div', { class: 'btn-row' },
-        h('button', { class: 'btn primary', type: 'button', text: 'Play again · same seed', onClick: () => controller.newGame(state.seed) }),
-        h('button', { class: 'btn', type: 'button', text: 'Play again · new seed', onClick: () => controller.newGame(Math.floor(Math.random() * 2_147_483_647)) }))));
-  }
-
-  function stat(label: string, value: string, cls = ''): HTMLElement {
-    return h('div', { class: `stat ${cls}`.trim() }, h('span', { class: 'stat-label', text: label }), h('b', { class: 'stat-value', text: value }));
-  }
-
   function update(state: GameState): void {
-    if (state.status !== 'playing' && state.result) {
-      if (shownResult !== state.result) {
-        shownResult = state.result;
-        saved = false;
-        shownCardId = null;
-        hiddenCardId = null;
-        renderResult(state, state.result);
-      }
-      if (!modal.isConnected) layer.appendChild(modal);
-      return;
-    }
-    shownResult = null;
-    const card = state.card;
+    const card = state.status === 'playing' ? state.card : null;
     if (!card) {
       shownCardId = null;
       hiddenCardId = null;

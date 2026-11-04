@@ -1,7 +1,9 @@
 /**
  * The Books: this month's P&L, the cash bridge, the invoice tray, a mini balance
- * sheet, "investors want r%" with its premia, and a 12-month history table.
- * DESIGN.md sections 9, 10 and 13.
+ * sheet with the score the buzzer would take now, "investors want r%" with its premia,
+ * and a 12-month history table. DESIGN.md sections 0, 9, 10 and 13. Opened by tapping
+ * any HUD pill. Lines for mechanics the tournament switches off (loans, the ad budget,
+ * R&D) are not drawn.
  */
 import { ledger, selectors } from '../../sim';
 import type { GameState, MonthBook } from '../../sim';
@@ -25,8 +27,6 @@ function pnlSection(book: MonthBook): HTMLElement {
     line('Enterprise contracts signed', p.enterpriseRevenue, { always: true }),
     line('Salaries', -p.salaries, { always: true }),
     line('Rent', -p.rent, { always: true }),
-    line('Ad spend', -p.marketing),
-    line('Loan interest', -p.interest),
     line('Depreciation', -p.depreciation),
     line('Severance', -p.severance),
     line('Bad debt', -p.badDebt),
@@ -56,7 +56,7 @@ function bridgeSection(state: GameState): HTMLElement {
     step('+', 'Disposal proceeds', b.disposalProceeds),
     step('−', 'Δ receivables (revenue not yet paid)', -b.deltaReceivables),
     step('=', 'Free cash flow', b.fcf, 'total'),
-    step('+', 'Financing (equity, loans)', b.financing),
+    step('+', 'Financing (investors)', b.financing),
     step('=', 'Δ cash', b.deltaCash, 'total'));
 }
 
@@ -74,14 +74,16 @@ function invoiceSection(state: GameState): HTMLElement {
   return sec;
 }
 
+/** DESIGN.md 0: score = company value × the founder's remaining share, taken at the buzzer. */
 function balanceSection(state: GameState): HTMLElement {
+  const value = Math.max(0, state.valuation.value);
   return section('Balance sheet (mini)',
     kv('Cash', money(state.cash)),
     kv('Receivables (open invoices)', money(ledger.openReceivables(state))),
     kv('Assets at book', money(ledger.assetsAtBook(state))),
-    kv('Debt', money(ledger.debtOf(state))),
+    kv('Company value', money(state.valuation.value), 'total'),
     kv('Your share', percent(state.founderShare, 1)),
-    kv('Company value', money(state.valuation.value), 'total'));
+    kv('Score if the buzzer went now', money(value * state.founderShare), 'big total'));
 }
 
 function valuationSection(state: GameState): HTMLElement {
@@ -91,15 +93,12 @@ function valuationSection(state: GameState): HTMLElement {
   const floorWins = v.floor >= v.operating;
   return section(`Investors want ${percent(v.r, 1)}`,
     note(floorWins
-      ? `Value = the floor. The cash-flow forecast comes to ${money(v.dcf)}, less than what the company already holds: cash, 90% of receivables, 60% of assets at book, and a team worth ${money(v.acquihire)} (skill × $50k), minus debt. The number moves when forecast cash flows beat that.`
-      : `Value = the cash-flow forecast plus net cash. Riskier choices raise the return investors want and lower the number even when profit is the same.`, 'muted'),
+      ? `Value = the floor. The cash-flow forecast comes to ${money(v.dcf)}, less than what the company already holds: cash, 90% of receivables, 60% of assets at book, and a team worth ${money(v.acquihire)} (skill × $50k). The number moves when forecast cash flows beat that.`
+      : 'Value = the cash-flow forecast plus net cash. Riskier choices raise the return investors want and lower the number even when profit is the same.', 'muted'),
     kv('In force', floorWins ? 'Floor' : 'Forecast'),
     kv('Base return', percent(pr.base, 1)),
     premium('Burn premium (runway)', pr.burn),
-    premium('R&D premium', pr.rnd),
-    premium('Leverage premium', pr.leverage),
     premium('Concentration premium', pr.concentration),
-    premium('Recession', pr.recession),
     kv('Forecast base (op. cash flow)', `${money(v.runRate)}/mo`),
     kv('Growth used', `${percent(v.growth, 1)}/mo`),
     kv('DCF (enterprise value)', money(v.dcf)),

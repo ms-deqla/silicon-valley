@@ -191,7 +191,8 @@ export function autoSpot(state: GameState, kind: Role | 'demo', size: RoomSize =
 export function ensureSeat(state: GameState, role: Role): Room | null {
   const seat = S.seatFor(state, role);
   if (seat) return seat;
-  const withSpace = state.rooms.find((r) => r.kind === role && assets.canBuy(state, 'desk', r.id).ok);
+  // DESIGN.md 5/6: the garage seats anyone, so its spare desk comes before a new room and its rent
+  const withSpace = state.rooms.find((r) => S.roomAcceptsRole(r, role) && assets.canBuy(state, 'desk', r.id).ok);
   if (withSpace) {
     assets.buy(state, 'desk', withSpace.id);
     return withSpace;

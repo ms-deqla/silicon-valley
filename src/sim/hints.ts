@@ -3,7 +3,7 @@
  * DESIGN.md section 13. Also home of the shared money formatter used on cards.
  */
 import type { GameState } from './types';
-import { CONFIG } from './config';
+import { CONFIG, RULES } from './config';
 import * as L from './ledger';
 import * as S from './selectors';
 
@@ -104,7 +104,10 @@ export function hintLine(state: GameState): string {
   if (state.card) return '';
   if (state.features === 0) return 'Ship a feature: nobody buys an empty product.';
   if (state.prospects.length > 0 && S.salesCapacityPerMonth(state) === 0) {
-    return 'An enterprise prospect is waiting in the lobby. Put yourself on sales or hire a rep.';
+    // DESIGN.md 0: the tournament has no founder-role control, so the hire is the only move
+    return RULES.founderRole
+      ? 'An enterprise prospect is waiting in the lobby. Put yourself on sales or hire a rep.'
+      : 'An enterprise prospect is waiting in the lobby. Hire a sales rep.';
   }
   const noLaptop = state.people.find((p) => !p.hasLaptop);
   if (noLaptop) {
@@ -116,12 +119,12 @@ export function hintLine(state: GameState): string {
   const asking = state.people.find((p) => p.raisePending);
   if (asking) return `${asking.name} is asking for a raise.`;
   const ar = L.openReceivables(state);
-  if (state.financeUnlocked && !S.hasRoom(state, 'finance') && ar > 0) {
+  if (RULES.finance && state.financeUnlocked && !S.hasRoom(state, 'finance') && ar > 0) {
     return `${fmtMoney(ar)} is owed to you. A Finance room gets you paid faster.`;
   }
   if (state.features >= MARKETING_HINT_FEATURES && !S.hasRoom(state, 'marketing')) return 'Visitors are a trickle. Open Marketing.';
   if (state.ticketsServedShare < SUPPORT_HINT_SERVED) return 'Support is swamped: customers are churning.';
-  if (state.day >= CONFIG.exit.sellFromDay) return `You can sell any time. Today's offer: ${fmtMoney(state.valuation.value)}.`;
+  if (RULES.sell && state.day >= CONFIG.exit.sellFromDay) return `You can sell any time. Today's offer: ${fmtMoney(state.valuation.value)}.`;
   if (whyLine(state) === AGREE) return 'Nothing owed and nothing bought yet, so the bars agree. Sign an enterprise deal and watch them split.';
   return 'Watch Profit and Cash flow disagree, then open Books to see why.';
 }

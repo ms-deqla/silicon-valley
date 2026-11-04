@@ -230,6 +230,8 @@ function founderNeedsNewSeat(state: GameState, founder: Person, role: Role): boo
 }
 
 export function canSetFounderRole(state: GameState, role: 'product' | 'sales'): Verdict {
+  // DESIGN.md 0: the tournament board has no founder-role control
+  if (!RULES.founderRole) return no('Not in this game.');
   const f = founderOf(state);
   if (!f) return no('There is no founder to reassign.');
   if (state.founderRole === role) return no(`You already work in ${ROLE_LABEL[role]}.`);

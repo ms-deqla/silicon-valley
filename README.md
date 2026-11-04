@@ -22,7 +22,8 @@ pnpm dev          # http://localhost:5173
 pnpm build        # dist/index.html, one self-contained file
 pnpm test         # vitest: ledger identities, determinism, every module
 pnpm typecheck
-pnpm balance --seeds 200              # headless strategies × seeds over 60 months; --months 36 for the three-year table
+pnpm balance                          # tournament strategies × 200 seeds × 30 months, with the DESIGN 16 tournament targets
+pnpm balance --full                   # the engine strategies under the full engine over 60 months; --months 36 for the three-year table
 ```
 
 The published ruleset is DESIGN.md section 0; `RULES` in `src/sim/config.ts` switches

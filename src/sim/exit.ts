@@ -3,7 +3,7 @@
  */
 import type { GameState, Result, Verdict } from './types';
 import { no, OK } from './types';
-import { CONFIG } from './config';
+import { CONFIG, RULES } from './config';
 import { debtOf } from './ledger';
 import { fmtMoney, fmtPct } from './hints';
 
@@ -30,6 +30,8 @@ export function scorePreview(state: GameState): ScorePreview {
 
 /** DESIGN.md 12: Sell is enabled from day 720 (month 24). */
 export function canSell(state: GameState): Verdict {
+  // DESIGN.md 0: in the tournament only the buzzer sells
+  if (!RULES.sell) return no('Not in this game.');
   if (state.day < CONFIG.exit.sellFromDay) return no('You can sell from the start of year 3');
   return OK;
 }

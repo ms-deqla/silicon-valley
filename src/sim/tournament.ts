@@ -31,7 +31,7 @@ export function setupCost(state: GameState, role: Role): number {
 /** Monthly rent a hire into this role would add today (a new small room when no room has a free desk or desk space). */
 export function roomRentForHire(state: GameState, role: Role): number {
   if (S.seatFor(state, role)) return 0;
-  if (state.rooms.some((r) => r.kind === role && assets.canBuy(state, 'desk', r.id).ok)) return 0;
+  if (state.rooms.some((r) => S.roomAcceptsRole(r, role) && assets.canBuy(state, 'desk', r.id).ok)) return 0;
   return rooms.roomRent(role, 'small');
 }
 
@@ -40,7 +40,7 @@ export function canHireRole(state: GameState, role: Role): Verdict {
   const spec = RULES.hire[role];
   const needed = spec.salary + setupCost(state, role);
   if (state.cash < needed) return no(`Not enough cash: ${fmtMoney(needed)} for the first month and the setup.`);
-  if (!S.seatFor(state, role) && !state.rooms.some((r) => r.kind === role && assets.canBuy(state, 'desk', r.id).ok) && !rooms.autoSpot(state, role)) {
+  if (!S.seatFor(state, role) && !state.rooms.some((r) => S.roomAcceptsRole(r, role) && assets.canBuy(state, 'desk', r.id).ok) && !rooms.autoSpot(state, role)) {
     return no('No space left on the lot.');
   }
   return OK;

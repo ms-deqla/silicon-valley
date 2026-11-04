@@ -1,46 +1,89 @@
 /**
- * The shell's handle on the simulation. Owns the GameState, the wall clock → game
- * day conversion, and the UI-only selection / placement state. Nothing in the UI
- * mutates the sim except through dispatch() here (CONTRIBUTING.md 7, DESIGN.md 14).
+ * The shell's handle on the simulation and on the round. Owns the GameState, the
+ * fixed wall-clock → game-day conversion (DESIGN.md 0: one month per 20 s, no pause,
+ * no speeds; game time is tied to the round clock, so a tab that was hidden catches up
+ * when it returns), the ten-minute deadline and the buzzer, the leaderboard posts, and
+ * the UI-only room highlight. Nothing in the UI mutates the sim except through
+ * dispatch() here (CONTRIBUTING.md 7, DESIGN.md 14).
  */
-import { advanceDay, canDispatch, createGame, dispatch as simDispatch } from '../sim';
-import type { Action, GameState, Verdict, VisualEvent } from '../sim';
+import { CONFIG, RULES, advanceDay, canDispatch, createGame, dispatch as simDispatch } from '../sim';
+import type { Action, Card, GameState, Status, Verdict, VisualEvent } from '../sim';
 import type { GameController, PlacementMode, Speed } from './api';
+import type { Leaderboard, LeaderStatus } from './leaderboard';
 
 export type Tone = 'good' | 'bad' | 'info';
 export type Listener<T> = (value: T) => void;
 
-/** GameController plus the shell-only hooks (toasts, selection and placement changes). */
+/** GameController plus the shell-only parts: the round clock, the leaderboard, toasts. */
 export interface ShellController extends GameController {
   readonly companyName: string;
-  /** Pause ⇄ the last running speed (space bar). */
-  togglePause(): void;
+  readonly playerName: string;
+  readonly leaderboard: Leaderboard;
+  /** Wall-clock ms left in the round, clamped at 0. The countdown never stops (DESIGN.md 0). */
+  readonly remainingMs: number;
+  /** Wall-clock ms since the round started, capped at the round length. */
+  readonly elapsedMs: number;
+  /** The round length in ms (RULES.roundSeconds). */
+  readonly roundMs: number;
   onToast(listener: (text: string, tone: Tone) => void): () => void;
-  onSelect(listener: Listener<string | null>): () => void;
-  onPlacement(listener: Listener<PlacementMode | null>): () => void;
-  /** Start over with a seed; the company name is kept unless a new one is given. */
-  newGame(seed: number, companyName?: string): void;
+  /** Start over on a seed with a fresh deadline. The caller registers the run with the leaderboard first. */
+  newGame(seed: number): void;
 }
 
-/** One game day = 1000 ms at 1× (DESIGN.md 4: a 30-day month is 30 s). */
-const DAY_MS = 1000;
-/** A long frame (hidden tab) advances at most this many days; the rest of the backlog is dropped. */
-const MAX_DAYS_PER_FRAME = 5;
+export interface ControllerOptions {
+  companyName?: string;
+  playerName?: string;
+}
 
-export function createController(seed: number, companyName?: string): ShellController {
-  let state: GameState = createGame(seed, companyName ? { companyName } : {});
-  let name = state.companyName;
-  let speed: Speed = 1;
-  let lastRunning: Speed = 1;
-  /** wall-clock ms accumulated toward the next game day */
-  let acc = 0;
-  let placement: PlacementMode | null = null;
+/** DESIGN.md 0: one game month per RULES.secondsPerMonth of wall clock, so one game day is this many ms. */
+const DAY_MS = (RULES.secondsPerMonth * 1000) / CONFIG.time.daysPerMonth;
+/**
+ * A frame simulates at most this many days (one game month): a long backlog (a tab that
+ * was hidden) is played out over a few frames so the page stays responsive, and none of
+ * it is dropped (DESIGN.md 0: the clock never stops).
+ */
+const MAX_DAYS_PER_FRAME = 30;
+/** Cards the buzzer may have to clear in a row (answering one can open the next, e.g. the crisis knock). */
+const MAX_CARDS_AT_BUZZER = 4;
+/** Speed is fixed in the tournament; the GameController contract still carries the field. */
+const FIXED_SPEED: Speed = 1;
+
+/**
+ * The choice that costs nothing when the buzzer finds a card open: 'decline' on an
+ * investor card; on an event the second choice (DESIGN.md 11: the free one).
+ */
+function freeChoice(card: Card): string | null {
+  const open = card.choices.filter((c) => !c.disabled);
+  const decline = open.find((c) => c.id === 'decline');
+  if (decline) return decline.id;
+  if (card.kind === 'event') {
+    const second = card.choices[1];
+    if (second && !second.disabled) return second.id;
+  }
+  return open.find((c) => c.id !== 'default')?.id ?? open[0]?.id ?? null;
+}
+
+function leaderStatus(status: Status): LeaderStatus {
+  return status === 'playing' ? 'playing' : status === 'sold' ? 'sold' : 'dead';
+}
+
+export function createController(seed: number, leaderboard: Leaderboard, opts: ControllerOptions = {}): ShellController {
+  let state: GameState = createGame(seed, opts.companyName ? { companyName: opts.companyName } : {});
+  const name = state.companyName;
+  const playerName = opts.playerName ?? '';
+  const roundMs = RULES.roundSeconds * 1000;
+  let startedAt = Date.now();
+  let deadline = startedAt + roundMs;
+  /** wall-clock ms of game time still to be simulated: the round clock's backlog */
+  let backlog = 0;
+  /** the round clock as of the last tick, never past the deadline; elapsed time joins the backlog from here */
+  let clockedAt = startedAt;
   let selected: string | null = null;
+  let postedMonth = -1;
+  let postedStatus: Status | null = null;
 
   const listeners = new Set<Listener<GameState>>();
   const toastListeners = new Set<(text: string, tone: Tone) => void>();
-  const selectListeners = new Set<Listener<string | null>>();
-  const placementListeners = new Set<Listener<PlacementMode | null>>();
 
   function emitToast(text: string, tone: Tone): void {
     for (const l of toastListeners) l(text, tone);
@@ -58,46 +101,88 @@ export function createController(seed: number, companyName?: string): ShellContr
     for (const v of keep) state.visuals.push(v);
   }
 
+  /**
+   * DESIGN.md 0: value, month and status go to the leaderboard after every month close
+   * and on every status change. It runs before the listeners, so the final standing is
+   * posted before the result screen draws.
+   */
+  function postStanding(): void {
+    const month = state.history.length;
+    if (month === postedMonth && state.status === postedStatus) return;
+    postedMonth = month;
+    postedStatus = state.status;
+    const value = Math.max(0, state.valuation.value);
+    // the standing every run is ranked by: the final score, or what the buzzer would pay now (value × founder share)
+    const score = state.result ? state.result.score : value * state.founderShare;
+    leaderboard.post({ value, score, month, status: leaderStatus(state.status) });
+  }
+
   function notify(): void {
     flushToastVisuals();
+    postStanding();
     for (const l of listeners) l(state);
   }
 
-  function setSpeed(s: Speed): void {
-    speed = s;
-    if (s > 0) lastRunning = s;
+  /**
+   * The buzzer (DESIGN.md 0): a waiting card is answered with its free choice first,
+   * because the sim refuses timeUp while a card is open; then the company is sold.
+   * Returns true when the sim changed.
+   */
+  function buzzer(): boolean {
+    const before = state.actions.length;
+    for (let i = 0; state.card && state.status === 'playing' && i < MAX_CARDS_AT_BUZZER; i++) {
+      const choiceId = freeChoice(state.card);
+      if (!choiceId || !simDispatch(state, { type: 'card', choiceId }).ok) break;
+    }
+    if (state.status === 'playing' && !state.card) simDispatch(state, { type: 'timeUp' });
+    backlog = 0;
+    const changed = state.actions.length !== before;
+    if (changed) notify();
+    return changed;
   }
 
-  function setPlacement(mode: PlacementMode | null): void {
-    placement = mode;
-    for (const l of placementListeners) l(mode);
-  }
-
-  function selectRoom(roomId: string | null): void {
-    if (roomId === null && selected === null) return;
-    selected = roomId;
-    for (const l of selectListeners) l(roomId);
-  }
-
-  function tick(dtMs: number): boolean {
-    // The clock stops by itself while a card is open or after the game ended (advanceDay returns early).
-    if (speed === 0 || state.status !== 'playing' || state.card) {
-      acc = 0;
+  /**
+   * Game time is tied to the round clock (DESIGN.md 0: the clock never stops). The
+   * wall-clock ms since the last tick, up to the deadline, join the backlog, which is
+   * simulated at most MAX_DAYS_PER_FRAME days per frame: a tab that was hidden catches
+   * up over a few frames instead of losing the months. A card stops game time and
+   * drops the backlog, so the months a card costs are never refunded, during it or
+   * after it. Once the deadline has passed and the backlog before it is played out,
+   * the buzzer sounds, once. The frame delta is not used: the deadline is Date.now(),
+   * so the game months and the countdown share one clock and cannot drift apart.
+   */
+  function tick(_dtMs: number): boolean {
+    if (state.status !== 'playing') {
+      backlog = 0;
       return false;
     }
-    const dayMs = DAY_MS / speed;
-    acc += Math.max(0, Number.isFinite(dtMs) ? dtMs : 0);
+    const now = Date.now();
+    // nothing past the deadline is played: that time belongs to the buzzer
+    const until = Math.min(now, deadline);
+    const elapsed = Math.max(0, until - clockedAt);
+    clockedAt = until;
+    // A card stops game time (advanceDay refuses to move anyway); the deadline keeps running.
+    if (state.card) {
+      backlog = 0;
+      return now >= deadline ? buzzer() : false;
+    }
+    backlog += elapsed;
     let days = 0;
-    while (acc >= dayMs && days < MAX_DAYS_PER_FRAME) {
+    while (backlog >= DAY_MS && days < MAX_DAYS_PER_FRAME) {
       advanceDay(state);
-      acc -= dayMs;
+      backlog -= DAY_MS;
       days += 1;
       if (state.card || state.status !== 'playing') {
-        acc = 0;
+        backlog = 0;
         break;
       }
     }
-    if (acc >= dayMs) acc = acc % dayMs; // backlog beyond the cap is dropped, not replayed
+    if (now >= deadline && backlog < DAY_MS) {
+      // the backlog before the deadline is played out (or a card stopped it): the buzzer, which notifies itself
+      const rang = buzzer();
+      if (!rang && days > 0) notify();
+      return rang || days > 0;
+    }
     if (days > 0) notify();
     return days > 0;
   }
@@ -108,19 +193,19 @@ export function createController(seed: number, companyName?: string): ShellContr
       emitToast(v.reason ?? 'Not possible right now.', 'bad');
       return v;
     }
-    if (action.type === 'placeRoom') setPlacement(null);
-    if (action.type === 'closeRoom' && selected === action.roomId) selectRoom(null);
     notify();
     return v;
   }
 
-  function newGame(newSeed: number, newName?: string): void {
-    if (newName) name = newName;
+  function newGame(newSeed: number): void {
     state = createGame(newSeed, { companyName: name });
-    acc = 0;
-    setSpeed(1);
-    if (placement) setPlacement(null);
-    if (selected !== null) selectRoom(null);
+    backlog = 0;
+    selected = null;
+    postedMonth = -1;
+    postedStatus = null;
+    startedAt = Date.now();
+    deadline = startedAt + roundMs;
+    clockedAt = startedAt;
     notify();
   }
 
@@ -129,26 +214,41 @@ export function createController(seed: number, companyName?: string): ShellContr
       return state;
     },
     get speed() {
-      return speed;
+      return FIXED_SPEED;
     },
-    set speed(s: Speed) {
-      setSpeed(s);
+    set speed(_s: Speed) {
+      // DESIGN.md 0: no pause, no speed buttons
     },
     get dayProgress() {
-      const s = speed || lastRunning;
-      return Math.max(0, Math.min(0.999, acc / (DAY_MS / s)));
+      return Math.max(0, Math.min(0.999, backlog / DAY_MS));
     },
     get placement() {
-      return placement;
+      // DESIGN.md 0: room placement is switched off; rooms place themselves
+      return null;
     },
-    set placement(mode: PlacementMode | null) {
-      setPlacement(mode);
+    set placement(_mode: PlacementMode | null) {
+      // never enters placement mode
     },
     get selectedRoomId() {
       return selected;
     },
     get companyName() {
       return name;
+    },
+    get playerName() {
+      return playerName;
+    },
+    get leaderboard() {
+      return leaderboard;
+    },
+    get remainingMs() {
+      return Math.max(0, deadline - Date.now());
+    },
+    get elapsedMs() {
+      return Math.min(roundMs, Math.max(0, Date.now() - startedAt));
+    },
+    get roundMs() {
+      return roundMs;
     },
     tick,
     dispatch,
@@ -164,28 +264,18 @@ export function createController(seed: number, companyName?: string): ShellContr
       if (state.visuals.length === 0) return [];
       return state.visuals.splice(0, state.visuals.length);
     },
-    setPlacement,
-    selectRoom,
-    toast: (text, tone = 'info') => emitToast(text, tone),
-    togglePause() {
-      setSpeed(speed === 0 ? lastRunning : 0);
+    setPlacement() {
+      // DESIGN.md 0: no placement mode
     },
+    selectRoom(roomId) {
+      // no room sheet in the tournament: the renderer only highlights the tapped room
+      selected = roomId;
+    },
+    toast: (text, tone = 'info') => emitToast(text, tone),
     onToast(listener) {
       toastListeners.add(listener);
       return () => {
         toastListeners.delete(listener);
-      };
-    },
-    onSelect(listener) {
-      selectListeners.add(listener);
-      return () => {
-        selectListeners.delete(listener);
-      };
-    },
-    onPlacement(listener) {
-      placementListeners.add(listener);
-      return () => {
-        placementListeners.delete(listener);
       };
     },
   };

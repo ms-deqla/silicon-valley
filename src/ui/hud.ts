@@ -1,21 +1,20 @@
 /**
  * The HUD: four glassy pills (Cash, Profit MTD, Cash flow MTD, Company value with a
- * sparkline), the calendar badge, speed buttons, the gear, then the why line and the
- * hint line. DESIGN.md sections 4, 9, 13. Patched in place on every state change.
+ * sparkline), the calendar badge beside the round countdown, then the why line and the
+ * hint line. DESIGN.md sections 0, 9, 13. Values are patched in place on every state
+ * change; the countdown is patched every frame from the wall clock.
  */
 import { CONFIG, hintLine, ledger, selectors, whyLine } from '../sim';
 import type { GameState } from '../sim';
-import type { Speed } from './api';
-import type { ShellController } from './controller';
-import { money, percent } from './format';
+import { clock, money, percent } from './format';
 import { h, svg } from './panels/dom';
 
 export interface Hud {
   el: HTMLElement;
   /** Patch values from state; cheap enough for every sim day. */
   update(state: GameState): void;
-  /** Re-highlight the speed buttons (speed can change without a state change). */
-  refreshSpeed(): void;
+  /** Every frame: writes the DOM only when the shown second or its colour changes. */
+  tickClock(remainingMs: number): void;
 }
 
 export interface HudHooks {
@@ -23,13 +22,15 @@ export interface HudHooks {
   onBooks(): void;
   /** The Company value pill: the Books where "Investors want r%" lists each premium (DESIGN.md 10). */
   onValue(): void;
-  onGear(): void;
 }
 
 /** Points of value history drawn in the sparkline (12 months of change). */
 const SPARK_POINTS = CONFIG.valuation.historyMonths + 1;
-const SPARK_W = 64;
-const SPARK_H = 22;
+const SPARK_W = 40;
+const SPARK_H = 16;
+/** DESIGN.md 0: the countdown turns amber under two minutes and red under thirty seconds. */
+const WARN_MS = 120_000;
+const DANGER_MS = 30_000;
 
 function sparkPaths(values: number[]): { line: string; area: string; up: boolean } {
   const pts = values.slice(-SPARK_POINTS);
@@ -49,7 +50,7 @@ function sparkPaths(values: number[]): { line: string; area: string; up: boolean
   return { line, area, up: pts[pts.length - 1] >= pts[0] * 0.99 };
 }
 
-export function createHud(controller: ShellController, hooks: HudHooks): Hud {
+export function createHud(hooks: HudHooks): Hud {
   function pill(label: string, onClick: () => void, title: string, extra?: Node): { el: HTMLElement; value: HTMLElement } {
     const value = h('span', { class: 'pill-value', text: '—' });
     const el = h('button', { class: 'pill', type: 'button', title, onClick },
@@ -63,53 +64,32 @@ export function createHud(controller: ShellController, hooks: HudHooks): Hud {
   const spark = svg('svg', { class: 'spark', viewBox: `0 0 ${SPARK_W} ${SPARK_H}`, 'aria-hidden': 'true' }, sparkArea, sparkLine);
 
   const cash = pill('Cash', hooks.onBooks, 'Open the books');
-  const profit = pill('Profit · month to date', hooks.onBooks, 'Open the books');
-  const fcf = pill('Cash flow · month to date', hooks.onBooks, 'Open the books');
+  const profit = pill('Profit · MTD', hooks.onBooks, 'Profit, month to date. Open the books');
+  const fcf = pill('Cash flow · MTD', hooks.onBooks, 'Free cash flow, month to date. Open the books');
   const value = pill('Company value', hooks.onValue, 'What investors want', spark);
 
   const calLabel = h('b', { class: 'cal-label', text: '' });
   const calDay = h('span', { class: 'cal-day', text: '' });
   const calendar = h('div', { class: 'cal' }, calLabel, calDay);
 
-  const speedButtons = new Map<Speed, HTMLButtonElement>();
-  const speedGroup = h('div', { class: 'speeds', attrs: { role: 'group', 'aria-label': 'Speed' } });
-  const speeds: { s: Speed; label: string; title: string }[] = [
-    { s: 0, label: '⏸', title: 'Pause (space)' },
-    { s: 1, label: '1×', title: 'Normal speed (1)' },
-    { s: 3, label: '3×', title: 'Fast (3)' },
-    { s: 10, label: '10×', title: 'Debug speed' },
-  ];
-  for (const sp of speeds) {
-    const b = h('button', { class: 'speed-btn', type: 'button', text: sp.label, title: sp.title, onClick: () => {
-      controller.speed = sp.s;
-      refreshSpeed();
-    } });
-    speedButtons.set(sp.s, b);
-    speedGroup.appendChild(b);
-  }
-
-  const gear = h('button', { class: 'icon-btn gear', type: 'button', text: '⚙', title: 'Settings', attrs: { 'aria-label': 'Settings' }, onClick: hooks.onGear });
+  const countdown = h('div', {
+    class: 'countdown',
+    text: '—:——',
+    title: 'Time left in the round. When it hits zero the buzzer sells the company.',
+    attrs: { role: 'timer', 'aria-label': 'Time left in the round' },
+  });
 
   const why = h('div', { class: 'why' });
   const hint = h('div', { class: 'hint' });
 
   const el = h('div', { class: 'hud' },
     h('div', { class: 'pills' }, cash.el, profit.el, fcf.el, value.el),
-    h('div', { class: 'hud-row' }, calendar, speedGroup, gear),
+    h('div', { class: 'hud-row' }, calendar, countdown),
     h('div', { class: 'lines' }, why, hint));
 
   function tone(target: HTMLElement, n: number): void {
     target.classList.toggle('neg', n < -0.5);
     target.classList.toggle('pos', n > 0.5);
-  }
-
-  function refreshSpeed(): void {
-    const cur = controller.speed;
-    for (const [s, b] of speedButtons) {
-      b.classList.toggle('active', s === cur);
-      // the 10× button is debug-only: shown while in use
-      if (s === 10) b.hidden = cur !== 10;
-    }
   }
 
   function update(state: GameState): void {
@@ -132,7 +112,7 @@ export function createHud(controller: ShellController, hooks: HudHooks): Hud {
 
     const cal = selectors.calendar(state.day);
     calLabel.textContent = cal.label;
-    calDay.textContent = `Day ${cal.dayOfMonth}`;
+    calDay.textContent = `Day ${cal.dayOfMonth} · month ${cal.month + 1}`;
     calendar.title = `Game day ${state.day}`;
 
     // DESIGN.md 13: whole sentences; the title keeps the full text reachable if the two-row clamp ever cuts one
@@ -144,9 +124,23 @@ export function createHud(controller: ShellController, hooks: HudHooks): Hud {
     hint.textContent = hi;
     hint.title = hi;
     hint.hidden = !hi;
-    refreshSpeed();
   }
 
-  refreshSpeed();
-  return { el, update, refreshSpeed };
+  let shownClock = '';
+  let shownTone = '';
+  function tickClock(remainingMs: number): void {
+    const text = clock(remainingMs);
+    if (text !== shownClock) {
+      shownClock = text;
+      countdown.textContent = text;
+    }
+    const t = remainingMs < DANGER_MS ? 'danger' : remainingMs < WARN_MS ? 'warn' : '';
+    if (t !== shownTone) {
+      shownTone = t;
+      countdown.classList.toggle('warn', t === 'warn');
+      countdown.classList.toggle('danger', t === 'danger');
+    }
+  }
+
+  return { el, update, tickClock };
 }

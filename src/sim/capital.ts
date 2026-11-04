@@ -219,11 +219,13 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
       : `${voice.fund} values ${state.companyName} at ${fmtMoney(preMoney)} before the money: too little to put even ${fmtMoney(C.offerRound)} in `
         + `without taking more than ${fmtPct(C.maxShareSold)} of the company in one round. Investors want ${fmtRate(val.r)} from a company like yours.`;
   } else if (desperate) {
+    // DESIGN.md 0: the loan is only on the table (and in the words) when the ruleset offers it
     body = `Word is out that ${state.companyName} is short of cash. ${voice.fund} will put in ${fmtMoney(amount)} for ${fmtPct(share)} of the company, `
-      + `a ${fmtPct(haircut)} haircut on your ${fmtMoney(value)} value. A loan at ${fmtRate(loanRate)} a year is the other way out.`;
+      + `a ${fmtPct(haircut)} haircut on your ${fmtMoney(value)} value.`
+      + (RULES.loans ? ` A loan at ${fmtRate(loanRate)} a year is the other way out.` : '');
   } else {
     body = `${voice.fund} values ${state.companyName} at ${fmtMoney(preMoney)} before the money. They would put in ${fmtMoney(amount)} `
-      + `for ${fmtPct(share)} of the company, or lend it at ${fmtRate(loanRate)} a year. Investors want ${fmtRate(val.r)} from a company like yours.`;
+      + `for ${fmtPct(share)} of the company${RULES.loans ? `, or lend it at ${fmtRate(loanRate)} a year` : ''}. Investors want ${fmtRate(val.r)} from a company like yours.`;
   }
 
   const card: Card = {
@@ -250,7 +252,7 @@ export function openKnock(state: GameState, desperate: boolean): Card | null {
       ? `${voice.fund} ${desperate ? 'looked at the books' : 'knocks'}, but ${state.companyName} is worth too little to raise against.`
       : desperate
         ? `${voice.fund} offers a lifeline: ${fmtMoney(amount)} for ${fmtPct(share)}.`
-        : `${voice.fund} knocks: ${fmtMoney(amount)} for ${fmtPct(share)}, or a loan at ${fmtRate(loanRate)}.`,
+        : `${voice.fund} knocks: ${fmtMoney(amount)} for ${fmtPct(share)}${RULES.loans ? `, or a loan at ${fmtRate(loanRate)}` : ''}.`,
     tone: desperate ? 'bad' : 'info',
   });
   return card;

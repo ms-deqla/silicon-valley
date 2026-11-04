@@ -98,9 +98,10 @@ export function normal(s: RngState): number {
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 }
 
-/** Seed from a YYYYMMDD date so everyone gets the same world on the same day. */
-export function dailySeed(date: Date = new Date()): number {
-  return date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate();
+/** Seed from a YYYYMMDD date so everyone gets the same world on the same day. The caller passes the date: nothing in src/sim reads the clock (CONTRIBUTING.md 5). */
+export function dailySeed(date: Date): number {
+  // UTC, so players in different time zones share the same world on the same date
+  return date.getUTCFullYear() * 10000 + (date.getUTCMonth() + 1) * 100 + date.getUTCDate();
 }
 
 /** Stable 32-bit hash of a string, for custom seeds typed by the player. */
