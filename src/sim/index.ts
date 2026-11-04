@@ -12,3 +12,7 @@ export { whyLine, hintLine } from './hints';
 export { customerName } from './events';
 export { scorePreview } from './exit';
 export { dailySeed, hashSeed } from './rng';
+export { advise, adviseCard } from './advisor';
+export type { Advice, CardAdvice, Urgency } from './advisor';
+export { takeaways, timeline } from './postmortem';
+export type { RunExtras, Takeaway, TimelinePoint, TimelineMarker, MarkerKind } from './postmortem';

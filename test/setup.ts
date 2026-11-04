@@ -22,6 +22,9 @@ export function useFullEngine(): void {
   RULES.sell = true;
   RULES.events = [...EVENT_TYPES];
   RULES.roundMonths = null;
+  RULES.roomSize = 'small';
+  RULES.autoCloseRooms = false;
+  RULES.upstairs = false;
 }
 
 /** The published ruleset, exactly as config.ts declares it. */

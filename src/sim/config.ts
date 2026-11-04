@@ -41,7 +41,7 @@ export const CONFIG = {
       server: { price: 20_000, lifeMonths: 48, label: 'Server' },
       coffee: { price: 5_000, lifeMonths: 60, label: 'Coffee machine' },
       demoRoom: { price: 40_000, lifeMonths: 120, label: 'Demo room' },
-      secondFloor: { price: 150_000, lifeMonths: 240, label: 'Second floor' },
+      secondFloor: { price: 60_000, lifeMonths: 240, label: 'Second floor' },
     } as Record<AssetKind, { price: number; lifeMonths: number; label: string }>,
     /** resale = this × book value; the rest is a disposal loss */
     resaleOfBook: 0.6,
@@ -334,6 +334,12 @@ export interface Rules {
   roundSeconds: number;
   /** game months in a round, or null when there is no round (the full engine) */
   roundMonths: number | null;
+  /** size of the rooms ensureSeat opens */
+  roomSize: RoomSize;
+  /** a department room closes itself when its last person leaves (desks sold at resale, rent stops) */
+  autoCloseRooms: boolean;
+  /** ensureSeat buys the second floor by itself when the ground floor is full */
+  upstairs: boolean;
   /** no scheduled investor knock opens when fewer than this many game days remain in the round (lifelines still do) */
   lastKnockDays: number;
 }
@@ -361,4 +367,7 @@ export const RULES: Rules = {
   roundSeconds: 600,
   roundMonths: 30,
   lastKnockDays: 30,
+  roomSize: 'large',
+  autoCloseRooms: true,
+  upstairs: true,
 };

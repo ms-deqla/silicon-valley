@@ -59,6 +59,44 @@ stay in the code and the tests but never reach the screen. Decided with the owne
   write for sees everyone else and is told their run is not on the shared board; when
   the store is slow the strip says the board may be out of date.
 
+- **Name.** The game is "Silicon Valley"; the company the player builds is BrightByte.
+- **Your stake (v2).** The fourth HUD pill is "Your stake": the score if the buzzer went
+  now (value × your share), with "69% of $1.2M" as its small line. A thin cap-table bar
+  under the pills shows your slice in your colour and each investor round as a grey
+  segment with the fund's initials. Books has a cap table (you, each fund, percentages).
+- **Dilution math on cards (v2).** Every investor card shows before → after: "You own
+  69% → 59%. Your stake today $821k → $870k. Value $1.2M → $1.25M." The decline choice
+  reads "Keep 69%".
+- **Space (v2).** Department rooms open large (6 desks). A room closes itself the moment
+  its last person leaves: its desks are sold at 60% of book and the rent stops. When the
+  ground floor is full the next hire builds the second floor for a one-off $60k, shown
+  on the + button as "+ $60k upstairs". The demo room keeps its footprint. Space never
+  blocks a hire until about 130 people.
+- **Coach (v2).** An advisor in the sim (`advisor.ts`) names the single best next action
+  with a reason, from the Playbook rules in section 18. The hint line becomes the coach
+  line with a tap that does it; the recommended board row pulses softly; every investor
+  and event card carries a coach badge with the recommendation and its reason. Advice
+  only, never automatic, the same for every player.
+- **Tutorial (v2).** On the first Start a coach-mark tour runs over the real screen with
+  the clock not yet running: nine stops, each pointing at the control it explains, Skip
+  on every stop; the countdown starts when the tour closes. A Playbook page (section 18)
+  opens from "How to play" on the start screen and from a "?" in the HUD (the clock
+  keeps running). All numbers in both are generated from config so they never drift.
+- **Practice (v2).** A second start button, "Practice (not scored)": the same round on
+  the same world, nothing posted to the board, the result screen says so.
+- **Post-mortem (v2).** The result screen adds two or three generated takeaways and a
+  timeline of your stake over the months with markers for hires, rounds, events and
+  purchases (section 20).
+- **Tournament code (v2).** An optional field on the start screen: everyone who types the
+  same word plays the same world (seed = hash of the word) and shares that world's
+  board. Empty means today's world.
+- **Colours and pace (v2).** Each player picks one of eight colours at the start (stored
+  with their score); the strip uses it, and under your chip it says how far you are
+  behind the leader ("$120k behind Katia").
+- **Share (v2).** "Copy result" on the result screen copies one line: "Silicon Valley,
+  4 Nov: $821k, 69% owned, 17 months. Beat me: <link>".
+- **Audio (v2).** Section 19.
+
 ## 1. Scope of the demo
 
 In: all six departments, people, assets, the three bars + value, valuation with risk
@@ -151,7 +189,7 @@ Buttons: Hire blue, Build amber, Invest green, Sell purple (frame 2 of the conce
 | server      | $20k   | 4y   | 1 per 50 customers (needed = floor(customers ÷ 50), the first at 50); each missing server = 10%/month outage chance |
 | coffee      | $5k    | 5y   | +10 morale for everyone, fixes "coffee" quirk |
 | demoRoom    | $40k   | 10y  | enterprise deals ×1.3; occupies a 2×2 block |
-| secondFloor | $150k  | 20y  | adds floor 1 (another 6×8 grid) |
+| secondFloor | $60k   | 20y  | adds floor 1 (another 6×8 grid); built by itself in the tournament when the ground floor is full |
 
 Straight-line depreciation booked at month end. Resale = 60% of book value; the
 P&L takes the loss. Each card shows price, monthly effect, monthly depreciation
@@ -438,3 +476,149 @@ appears here.
   invoice timing: the company value falls by at most 20% between two closes after
   month 12 (median of the biggest fall over surviving rounds). The engine-only
   strategies above run under the full engine (`--full`).
+
+## 17. Visual language (from the three Figma frames)
+
+- **Type.** Nunito from Google Fonts (600, 700, 800) with a rounded system fallback;
+  `font-variant-numeric: tabular-nums` on every number. Headlines 800, labels 700
+  small caps-ish (letter-spacing 0.02em), body 600.
+- **Surfaces.** Glass pills: white at 72% with a 12px backdrop blur, a 1px white stroke
+  at 60%, radius 18px, soft shadow (0 6px 18px rgba(20,24,40,0.12)). Cards: white, radius
+  24px, shadow 0 18px 40px rgba(20,24,40,0.18). Action buttons: filled, radius 16px, 56px
+  tall, white 800 text; secondary buttons pale (tint of the accent at 12%).
+- **Accents (the four buttons of the frames).** Blue #3B82F6 (Product, Hire), amber
+  #F59E0B (Build, rooms), green #22C55E (Invest, take equity, money in), purple #8B5CF6
+  (Sell, score). Department colours stay as section 3. Semantic: good green, bad red
+  #E5484D, warn amber. Scene pastels unchanged.
+- **Icons.** One inline-SVG set (24px grid, 2px rounded strokes): banknote stack (cash),
+  trend arrow (profit, up/down), bars (cash flow), building (value), pie (stake),
+  person-plus, person-minus, wrench (Product), handshake (Sales), headset (Support),
+  megaphone (Marketing), server, screen (demo room), coin, calendar, gear, speaker on /
+  off, question, play, copy, trophy, flag.
+- **HUD.** Four glass pills, icon left in its accent colour, label small, number large.
+  Calendar badge: a small white card with a blue header strip ("Year 2 · Q1") and the
+  month and day below. Countdown: dark pill, white 800 digits, amber under 2:00, red
+  under 0:30. Cap-table bar: 8px tall, radius 4, your colour, grey rounds with initials
+  on hover/tap. Sparkline in the value pill: 2px line, area fill at 15%.
+- **Board.** One tile per department: icon in a tinted circle (department colour), name
+  and headcount line, the − button pale, the + button filled in the department colour
+  with its salary and a caption line. Servers and demo room tiles in grey-blue and
+  purple. The coach's recommended tile pulses (opacity 0.65–1, 1.2 s) and shows a small
+  "coach" chip. Respect prefers-reduced-motion (no pulse, chip only).
+- **Cards.** Portrait circle (initials on a pastel blob), eyebrow ("INVESTOR" / "EVENT"),
+  title 800, speaker line, italic quote in a pale box, body, the coach badge (a pill with
+  the trophy icon and "Coach: take it · 2 months of cash left"), then the choices: the
+  recommended one green, the other blue or grey, each with label and detail; footer line
+  about the clock.
+- **Floor feedback.** Coin popups as green pills with a coin icon ("+$12k"), invoice slips
+  white with a blue line, the "Owed to you $184k" sign white with a dark border and a
+  pointer at the tray, "Build here" dashed plots with a plus on free slots.
+
+## 18. Tutorial and coach
+
+Tour (first Start, clock not running, Skip on every stop), one sentence or two per stop,
+numbers generated from CONFIG/RULES:
+1. Goal and clock: "Ten minutes. Score = company value × the share you still own when
+   the buzzer sells the company. Cards stop the game, not the clock."
+2. The pills: "Cash pays salaries and ends the game below zero. Profit counts invoices
+   you have not been paid yet. Cash flow is what really moved. Your stake is your score."
+3. Product: "Engineers ship features. Your first lands in about five weeks on your own;
+   two engineers ship twice as fast. Every feature raises the share of visitors who buy
+   (18% at three features, 39% at ten) and the price 10%. Nothing else works until the
+   first feature exists."
+4. Marketing: "Marketers bring people to the door. With nobody in Marketing about 6
+   visitors a month wander in; each marketer adds about 15. Visitors only become
+   customers if you have features, so marketing before your first feature is wasted
+   money. Each small customer pays $300 a month, plus 10% per feature. Hire your first
+   marketer when the hint says visitors are a trickle (around three features); a second
+   once Profit shows the first one pays for itself. More customers means more tickets and
+   more servers, so Support and a server follow."
+5. Sales: "About one visitor in seven is a company, not a person. Companies wait in the
+   lobby for a sales rep; with no rep they give up after 45 days. A rep works one deal at
+   a time, about a month each, and closes roughly half. A deal is a yearly contract worth
+   $30k plus 10% per feature (a third more with a demo room). The whole contract counts
+   as profit the day it is signed, but the cash arrives 90 days later: that is the tray
+   at reception and the reason Profit and Cash flow disagree. Hire a rep the moment a
+   prospect is waiting and you can cover three months of their pay; a second when
+   prospects queue. A rep with no prospects is pure cost."
+6. Support: "Customers raise tickets. With nobody answering, 8% of them leave every
+   month; one agent keeps that at 2% up to about 120 customers. Hire from about 10
+   customers."
+7. Servers and demo room: "One server per 50 customers. Each missing server is a 10%
+   chance per month of an outage that loses 15% of your customers. Cash leaves now;
+   profit only sees a small slice each month. The demo room: $40k once, enterprise deals
+   a third bigger. Worth it when a rep is closing."
+8. Investors and events: "Cash now for a slice forever. The first offer comes in month 2
+   to 4 and prices your team and your cash, because the business is not worth anything
+   yet; early offers cost 15–40%, later ones 5–10%. Take money you can spend inside the
+   round; decline the rest. If the bank runs dry a lifeline comes at half price. No
+   offers in the last month. Late payer: press them if you need the cash. Press
+   coverage: pay for the push if you have features to sell. Outage: pay the fix when the
+   customers at stake are worth more than $15k."
+9. The strip and firing: "Everyone is ranked by what the buzzer would pay them now.
+   Firing costs three months' pay; an emptied room closes itself."
+
+Playbook page: the scaling sequence, then the nine texts above as sections, then the
+three bars explained. Sequence: "Minute 0–1: an engineer. Minute 1–2: take the first
+investor. When the hint says visitors are a trickle: a marketer. When a prospect is
+waiting: a rep. At 10 customers: a support agent. At 50 customers: a server. With more
+than $100k in the bank: the demo room and a second engineer, then a second marketer.
+After the second investor, decline unless you can spend the money before the buzzer.
+Answer every card at once: it stops your game, not the clock. Watch three things: the
+hint line, the lobby, and the strip."
+
+Coach rules (`advisor.advise`, first match wins; every number from config/RULES; the
+advice carries the action to dispatch, a label, a reason and an urgency now/soon/idea):
+1. A card is open → card advice (`adviseCard`): investor knock: take when runway < 6
+   months, or when the share sold ≤ 15% and at least 6 game months remain (the money
+   can be spent); decline when fewer than 4 game months remain or the share sold > 30%
+   with runway > 8 months; lifeline (desperation / crisis): take when cash < 0 or runway
+   < 2 months ("or the bank closes you"), else decline. Late payer: press when cash <
+   3 months of costs, else wait. Press coverage: push when features ≥ 3 and cash > $25k.
+   Outage: fix when customers lost × average monthly price × months left > the fix cost.
+2. No features and no engineer → hire an engineer (now).
+3. A prospect waits, no rep, cash covers 3 months of the new run-rate → hire a rep (now).
+4. Servers short and cash ≥ price → buy a server (now).
+5. Customers ≥ 10 and no support agent, cash rule → hire support (soon).
+6. Features ≥ 3 and no marketer, cash rule → hire a marketer (soon).
+7. Customers > 120 × support agents → another agent (soon).
+8. Cash > $100k, a rep hired, no demo room → build the demo room (idea).
+9. Cash > $100k → another engineer, then another marketer (idea), alternating by count.
+10. Runway < 2 months and no card → "Hold on: a lifeline comes if the bank runs dry.
+    Don't hire." (now, no action).
+11. Otherwise: "Watch the lobby and the strip." (idea, no action).
+The scripted tPlayer follows the coach exactly, so the balance harness measures the
+advice.
+
+## 19. Audio
+
+Web Audio only (no files): a lo-fi loop at 84 BPM, 16 bars, chords Cmaj7 – Am7 – Fmaj7 –
+G7 on a soft triangle pad through a low-pass filter, a sine bass on the roots, a sparse
+pentatonic pluck chosen by a non-sim random, a soft kick and hat from filtered noise;
+master gain 0.25. Starts on the Start tap (browsers refuse sound before a gesture).
+Effects: coin (two short sine blips) when cash lands, knock (two filtered noise taps)
+when an investor card opens, page (a noise sweep) when an event opens, buzzer (a square
+chord, one second) at the end, click (a tick) on board actions. A speaker button in the
+HUD and on the start screen, default on, remembered on the device under `sv.audio`.
+When the AudioContext cannot be created the button is hidden.
+
+## 20. Post-mortem, timeline, codes, colours, sharing
+
+Takeaways (`postmortem.takeaways`, the three with the highest impact in $, each a title
+and a detail with the numbers): raised but unspent (equity in vs cash at the end: "You
+raised $X and ended with $Y unspent: Z% of your share for cash you never used");
+cards left waiting (wall-clock ms with a card open, from the controller: "Cards waited
+N s: M game months lost"); support too late (first support hire's customer count vs 10
+and the customers churned before it); servers too late (outages suffered and customers
+lost); marketing too late (first marketer month vs the month features reached 3); idle
+cash (months with cash > $150k and no hire); out of cash (costs vs revenue in the last
+month). Timeline (`postmortem.timeline`): one point per closed month with value, share
+and stake, plus markers for hires (role), rounds, events, servers, the demo room and
+the second floor, drawn as a small SVG on the result screen.
+
+Tournament code: seed = hashSeed(code) when the field is not empty; the leaderboard
+query is by seed, so every code has its own board. Colour: one of eight named pastel
+colours chosen on the start screen, stored as `color` in the player's document, used in
+the strip and the tables. Pace line under your chip: "$X behind <leader>" or "You lead".
+Copy result: `navigator.clipboard.writeText` inside the click handler with a selectable
+fallback.

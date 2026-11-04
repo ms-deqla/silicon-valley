@@ -47,6 +47,9 @@ export function applyFullEngine(): void {
   RULES.sell = true;
   RULES.events = [...EVENT_TYPES];
   RULES.roundMonths = null;
+  RULES.roomSize = 'small';
+  RULES.autoCloseRooms = false;
+  RULES.upstairs = false;
 }
 
 /** Switch RULES back to the published tournament ruleset (DESIGN.md 0), from the copy taken at module load. */
