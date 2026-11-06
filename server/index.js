@@ -109,6 +109,16 @@ function makePgStore(connectionString) {
           first_seen timestamptz NOT NULL
         )`);
       await pool.query(`DELETE FROM scores WHERE updated_at < now() - interval '${KEEP_DAYS} days'`);
+      // backfill: devices and worlds that posted before the totals existed (2026-11-06); a no-op once they are in
+      await pool.query(`
+        INSERT INTO players (device_id, first_seen, last_seen, runs, finished)
+        SELECT device_id, min(updated_at), max(updated_at), count(*), count(*) FILTER (WHERE status <> 'playing')
+        FROM scores GROUP BY device_id
+        ON CONFLICT (device_id) DO NOTHING`);
+      await pool.query(`
+        INSERT INTO days (seed, first_seen)
+        SELECT seed, min(updated_at) FROM scores GROUP BY seed
+        ON CONFLICT (seed) DO NOTHING`);
     },
     async list(seed) {
       const { rows } = await pool.query('SELECT * FROM scores WHERE seed = $1 ORDER BY score DESC, name ASC', [seed]);
