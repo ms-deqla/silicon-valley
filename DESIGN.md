@@ -613,6 +613,13 @@ When the AudioContext cannot be created the button is hidden.
 
 ## 20. Post-mortem, timeline, codes, colours, sharing
 
+- **Board page (added 2026-11-06).** `/board.html` is a standalone page for a screen in the
+  room: the live order of today's world (or `?code=word` for a tournament's world), ranked
+  by the posted standing like the in-game board, with the top run highlighted, runs left
+  mid-round dimmed at the bottom, three totals (playing today, people who have ever played,
+  rounds ever played, from the API's `/stats`) and the QR code to join. It polls the API
+  every 5 s (totals every 30 s) and never writes. `?rows=N` sets how many rows fit.
+
 Takeaways (`postmortem.takeaways`, the three with the highest impact in $, each a title
 and a detail with the numbers): raised but unspent (equity in vs cash at the end: "You
 raised $X and ended with $Y unspent: Z% of your share for cash you never used");

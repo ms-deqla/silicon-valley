@@ -4,6 +4,7 @@
  *
  *   GET  /health                -> "ok"
  *   GET  /scores?seed=<int>     -> JSON array of rows on that seed
+ *   GET  /stats                 -> {players, runs, finished, days}: all-time totals for the board page
  *   PUT  /scores/<deviceId>     -> upsert {name, seed, value, score, month, status, best, color, updatedAt}; returns the stored row
  *
  * Storage: Postgres when DATABASE_URL is set (the table is created on startup), else an
@@ -33,6 +34,11 @@ const KEEP_DAYS = 30;
 // ---------------------------------------------------------------- storage
 function makeMemoryStore() {
   const rows = new Map();
+  /** all-time counters (the board page's "people have played"): a run is one (device, seed) row ever created */
+  const players = new Map();
+  let runs = 0;
+  let finished = 0;
+  const days = new Set();
   return {
     kind: 'memory',
     async init() {},
@@ -44,7 +50,14 @@ function makeMemoryStore() {
       const old = rows.get(key);
       const next = { ...row, best: Math.max(row.best, old ? old.best : 0) };
       rows.set(key, next);
+      if (!old) runs += 1;
+      if (row.status !== 'playing' && (!old || old.status === 'playing')) finished += 1;
+      if (!players.has(row.deviceId)) players.set(row.deviceId, Date.now());
+      days.add(row.seed);
       return next;
+    },
+    async stats() {
+      return { players: players.size, runs, finished, days: days.size };
     },
   };
 }
@@ -81,6 +94,20 @@ function makePgStore(connectionString) {
           PRIMARY KEY (device_id, seed)
         )`);
       await pool.query('CREATE INDEX IF NOT EXISTS scores_seed_idx ON scores (seed)');
+      // all-time totals survive the 30-day prune of scores: one row per device, one counter per run
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS players (
+          device_id text PRIMARY KEY,
+          first_seen timestamptz NOT NULL,
+          last_seen timestamptz NOT NULL,
+          runs int NOT NULL DEFAULT 0,
+          finished int NOT NULL DEFAULT 0
+        )`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS days (
+          seed bigint PRIMARY KEY,
+          first_seen timestamptz NOT NULL
+        )`);
       await pool.query(`DELETE FROM scores WHERE updated_at < now() - interval '${KEEP_DAYS} days'`);
     },
     async list(seed) {
@@ -95,10 +122,30 @@ function makePgStore(connectionString) {
            name = EXCLUDED.name, value = EXCLUDED.value, score = EXCLUDED.score, month = EXCLUDED.month,
            status = EXCLUDED.status, best = GREATEST(scores.best, EXCLUDED.best), color = EXCLUDED.color,
            updated_at = EXCLUDED.updated_at
-         RETURNING *`,
+         RETURNING *, (xmax = 0) AS inserted, (SELECT status FROM scores s WHERE s.device_id = $1 AND s.seed = $2) AS prev_status`,
         [row.deviceId, row.seed, row.name, row.value, row.score, row.month, row.status, row.best, row.color, row.updatedAt],
       );
-      return toRow(rows[0]);
+      const r = rows[0];
+      const newRun = r.inserted ? 1 : 0;
+      // prev_status is read before the update inside the same statement, so it is the old status (null for a new row)
+      const newlyFinished = row.status !== 'playing' && (r.inserted || r.prev_status === 'playing') ? 1 : 0;
+      await pool.query(
+        `INSERT INTO players (device_id, first_seen, last_seen, runs, finished) VALUES ($1, now(), now(), $2, $3)
+         ON CONFLICT (device_id) DO UPDATE SET last_seen = now(), runs = players.runs + $2, finished = players.finished + $3`,
+        [row.deviceId, newRun, newlyFinished],
+      );
+      await pool.query('INSERT INTO days (seed, first_seen) VALUES ($1, now()) ON CONFLICT DO NOTHING', [row.seed]);
+      return toRow(r);
+    },
+    async stats() {
+      const { rows } = await pool.query(
+        `SELECT (SELECT count(*) FROM players) AS players,
+                (SELECT coalesce(sum(runs), 0) FROM players) AS runs,
+                (SELECT coalesce(sum(finished), 0) FROM players) AS finished,
+                (SELECT count(*) FROM days) AS days`,
+      );
+      const r = rows[0];
+      return { players: Number(r.players), runs: Number(r.runs), finished: Number(r.finished), days: Number(r.days) };
     },
   };
 }
@@ -210,6 +257,9 @@ async function handle(req, res) {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end('ok');
     return;
+  }
+  if (req.method === 'GET' && url.pathname === '/stats') {
+    return send(res, 200, { ...(await store.stats()), updatedAt: Date.now() });
   }
   if (req.method === 'GET' && url.pathname === '/scores') {
     const seed = parseSeed(url.searchParams.get('seed'));

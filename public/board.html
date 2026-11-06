@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silicon Valley · live board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #14161c; --card: #1d2029; --line: #2a2e3a; --ink: #fff; --ink-2: #c9cdd6; --ink-3: #8a909c; --blue: #4f8cff; --violet: #a78bfa; --good: #35c46f; --bad: #ff5c5c; --amber: #ffb02e; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); font-family: Nunito, system-ui, sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; min-height: 100vh; padding: clamp(16px, 2.5vw, 40px); gap: clamp(12px, 2vw, 28px); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+  h1 { margin: 0; font-weight: 900; font-size: clamp(32px, 4.5vw, 72px); line-height: 1; background: linear-gradient(90deg, var(--blue), var(--violet)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { margin: .3em 0 0; color: var(--ink-2); font-weight: 700; font-size: clamp(16px, 1.6vw, 26px); }
+  .sub b { color: var(--ink); }
+  .totals { display: flex; gap: clamp(12px, 2vw, 32px); align-items: stretch; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: clamp(10px, 1.2vw, 18px) clamp(14px, 1.8vw, 28px); min-width: 9em; }
+  .stat .n { font-weight: 900; font-size: clamp(28px, 3.6vw, 60px); line-height: 1; }
+  .stat .l { color: var(--ink-3); font-weight: 800; font-size: clamp(12px, 1.1vw, 18px); text-transform: uppercase; letter-spacing: .06em; margin-top: 6px; }
+  .join { display: flex; align-items: center; gap: 14px; background: #fff; color: #14161c; border-radius: 18px; padding: 10px 16px 10px 10px; text-decoration: none; }
+  .join img { width: clamp(64px, 7vw, 110px); height: auto; display: block; }
+  .join b { display: block; font-size: clamp(14px, 1.4vw, 22px); font-weight: 900; }
+  .join span { font-size: clamp(11px, 1vw, 15px); font-weight: 800; color: #4b5160; }
+  main { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+  .cols { display: grid; grid-template-columns: 3em 1fr auto auto; gap: 0 clamp(10px, 1.5vw, 24px); padding: 0 clamp(12px, 1.5vw, 24px) 8px; color: var(--ink-3); font-weight: 800; font-size: clamp(11px, 1vw, 16px); text-transform: uppercase; letter-spacing: .06em; }
+  .cols :nth-child(3), .cols :nth-child(4) { text-align: right; }
+  ol { list-style: none; margin: 0; padding: 0; display: grid; align-content: start; gap: clamp(6px, .8vw, 12px); }
+  li { display: grid; grid-template-columns: 3em 1fr auto auto; align-items: center; gap: 0 clamp(10px, 1.5vw, 24px); background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: clamp(8px, 1vw, 14px) clamp(12px, 1.5vw, 24px); font-size: clamp(18px, 2.2vw, 36px); font-weight: 800; }
+  li.top { border-color: var(--blue); background: linear-gradient(90deg, rgba(79,140,255,.18), var(--card) 60%); }
+  li.gone { opacity: .45; }
+  .rank { font-weight: 900; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  li.top .rank { color: var(--blue); }
+  .who { display: flex; align-items: center; gap: .5em; min-width: 0; }
+  .dot { flex: none; width: .8em; height: .8em; border-radius: 50%; border: 2px solid rgba(0,0,0,.25); }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .score { font-weight: 900; font-variant-numeric: tabular-nums; text-align: right; }
+  .tag { font-size: .55em; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; padding: .25em .6em; border-radius: 999px; background: #2a2e3a; color: var(--ink-2); text-align: center; min-width: 6.5em; }
+  .tag.playing { background: rgba(79,140,255,.2); color: var(--blue); }
+  .tag.sold { background: rgba(53,196,111,.2); color: var(--good); }
+  .tag.dead { background: rgba(255,92,92,.2); color: var(--bad); }
+  .tag.gone { background: #2a2e3a; color: var(--ink-3); }
+  .more, .empty { color: var(--ink-3); font-weight: 800; font-size: clamp(14px, 1.4vw, 22px); padding: 12px clamp(12px, 1.5vw, 24px); }
+  .empty { font-size: clamp(18px, 2vw, 32px); padding-top: 10vh; text-align: center; }
+  footer { position: fixed; right: 16px; bottom: 12px; color: var(--ink-3); font-weight: 800; font-size: 12px; }
+  footer.err { color: var(--amber); }
+  @media (max-width: 720px) { .totals { width: 100%; } .stat { flex: 1; min-width: 0; } .join { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Silicon Valley</h1>
+    <p class="sub" id="sub">Live board · today's world</p>
+  </div>
+  <div class="totals">
+    <div class="stat"><div class="n" id="today">–</div><div class="l">playing today</div></div>
+    <div class="stat"><div class="n" id="players">–</div><div class="l">people have played</div></div>
+    <div class="stat"><div class="n" id="runs">–</div><div class="l">rounds played</div></div>
+    <a class="join" href="https://siliconvalley.party" id="join"><img src="qr.svg" alt="QR code to play"><div><b>Scan to play</b><span>siliconvalley.party</span></div></a>
+  </div>
+</header>
+<main>
+  <div class="cols"><span>#</span><span>Founder</span><span>Status</span><span>Payout</span></div>
+  <ol id="list"></ol>
+  <div class="more" id="more" hidden></div>
+  <div class="empty" id="empty" hidden>Nobody on this world yet. Scan the code and be first.</div>
+</main>
+<footer id="foot"></footer>
+<script>
+(() => {
+  const q = new URL(location.href).searchParams;
+  const API = (q.get('api') || 'https://silicon-valley-api.onrender.com').replace(/\/$/, '');
+  const CODE = (q.get('code') || '').trim().slice(0, 24);
+  const ROWS = Math.max(5, Math.min(50, Number(q.get('rows')) || 12));
+  const ROUND_MS = 600_000;
+  const ABANDONED_MS = 2 * ROUND_MS;
+  const COLOR = { rose: '#f7b9c8', peach: '#f9cba8', lemon: '#f5e59b', mint: '#b7e8c7', sky: '#b9d8f7', lilac: '#d5c4f5', sand: '#e9d8b8', slate: '#c7d0da' };
+
+  // the same seed rule as the game (src/sim/rng.ts): the UTC date, or a 32-bit hash of the tournament code
+  function dailySeed(d) { return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate(); }
+  function hashSeed(text) {
+    const t = text.trim().toLowerCase();
+    if (/^-?\d+$/.test(t)) return parseInt(t, 10) | 0;
+    let h = 2166136261;
+    for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h | 0;
+  }
+  const seed = CODE ? hashSeed(CODE) : dailySeed(new Date());
+
+  function money(n) {
+    if (!Number.isFinite(n)) return '—';
+    const a = Math.abs(n);
+    const t1 = (x) => (Math.round(x * 10) / 10).toFixed(1).replace(/\.0$/, '');
+    let s;
+    if (a < 999.5) s = `$${Math.round(a)}`;
+    else if (a < 999_500) { const k = a / 1000; s = k < 9.95 ? `$${t1(k)}k` : `$${Math.round(k)}k`; }
+    else { const m = a / 1e6; s = m < 9.95 ? `$${t1(m)}M` : m < 999.5 ? `$${Math.round(m)}M` : `$${t1(m / 1000)}B`; }
+    return n < 0 ? `−${s}` : s;
+  }
+  const fmtInt = (n) => Number.isFinite(n) ? n.toLocaleString('en-US') : '–';
+
+  const $ = (id) => document.getElementById(id);
+  $('sub').innerHTML = CODE ? `Live board · world of “<b></b>”` : `Live board · today's world <b>${seed}</b>`;
+  if (CODE) { $('sub').querySelector('b').textContent = CODE; $('join').href = `https://siliconvalley.party/?code=${encodeURIComponent(CODE)}`; }
+
+  function abandoned(r, now) { return r.status === 'playing' && now - r.updatedAt > ABANDONED_MS; }
+  function order(rows, now) {
+    return [...rows].sort((a, b) => {
+      const ga = abandoned(a, now) ? 1 : 0, gb = abandoned(b, now) ? 1 : 0;
+      if (ga !== gb) return ga - gb;
+      if (b.score !== a.score) return b.score - a.score;
+      return String(a.name).localeCompare(String(b.name)) || String(a.deviceId).localeCompare(String(b.deviceId));
+    });
+  }
+  function tag(r, now) {
+    if (abandoned(r, now)) return ['gone', 'left'];
+    if (r.status === 'sold') return ['sold', 'sold'];
+    if (r.status === 'dead') return ['dead', 'out of cash'];
+    return ['playing', `month ${r.month}`];
+  }
+
+  function render(rows) {
+    const now = Date.now();
+    const sorted = order(rows, now);
+    const list = $('list');
+    list.replaceChildren();
+    sorted.slice(0, ROWS).forEach((r, i) => {
+      const [cls, text] = tag(r, now);
+      const li = document.createElement('li');
+      if (i === 0 && cls !== 'gone') li.classList.add('top');
+      if (cls === 'gone') li.classList.add('gone');
+      const rank = document.createElement('span'); rank.className = 'rank'; rank.textContent = String(i + 1);
+      const who = document.createElement('span'); who.className = 'who';
+      const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = COLOR[r.color] || COLOR.sky;
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = r.name || 'Anonymous';
+      who.append(dot, name);
+      const st = document.createElement('span'); st.className = `tag ${cls}`; st.textContent = text;
+      const score = document.createElement('span'); score.className = 'score'; score.textContent = money(r.score);
+      li.append(rank, who, st, score);
+      list.appendChild(li);
+    });
+    const more = sorted.length - ROWS;
+    $('more').hidden = more <= 0;
+    $('more').textContent = more > 0 ? `and ${more} more` : '';
+    $('empty').hidden = sorted.length > 0;
+    $('today').textContent = fmtInt(rows.length);
+  }
+
+  let okAt = 0;
+  async function pollScores() {
+    try {
+      const res = await fetch(`${API}/scores?seed=${seed}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      render(await res.json());
+      okAt = Date.now();
+      $('foot').className = ''; $('foot').textContent = `updated ${new Date(okAt).toLocaleTimeString()}`;
+    } catch (e) {
+      $('foot').className = 'err'; $('foot').textContent = `board not reachable (${e.message}); retrying`;
+    }
+  }
+  async function pollStats() {
+    try {
+      const res = await fetch(`${API}/stats`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const s = await res.json();
+      $('players').textContent = fmtInt(s.players);
+      $('runs').textContent = fmtInt(s.runs);
+    } catch { /* the last numbers stay */ }
+  }
+  pollScores(); pollStats();
+  setInterval(pollScores, 5000);
+  setInterval(pollStats, 30000);
+})();
+</script>
+</body>
+</html>

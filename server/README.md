@@ -30,6 +30,11 @@ curl -s localhost:8787/health
 curl -s 'localhost:8787/scores?seed=20261104'
 # []
 
+curl -s localhost:8787/stats
+# {"players":3,"runs":4,"finished":3,"days":2,"updatedAt":1762250000000}
+# all-time totals for the board page (/board.html): distinct devices, (device, seed) rows ever created,
+# runs that reached sold/dead, distinct worlds. Kept in the players/days tables, which the 30-day prune never touches.
+
 curl -s -X PUT localhost:8787/scores/dev-1 \
   -H 'Content-Type: application/json' \
   -d '{"name":"Mike","seed":20261104,"value":120000,"score":84000,"month":3,"status":"playing","best":0,"color":"mint","updatedAt":0}'
