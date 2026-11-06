@@ -21,6 +21,8 @@ export interface Hud {
   update(state: GameState): void;
   /** Every frame: writes the DOM only when the shown second or its colour changes. */
   tickClock(remainingMs: number): void;
+  /** DESIGN.md 0, Pause: the button shows play and the countdown dims while paused. */
+  setPaused(paused: boolean): void;
 }
 
 export interface HudHooks {
@@ -30,6 +32,8 @@ export interface HudHooks {
   onValue(): void;
   /** The "?" button opens the Playbook (DESIGN.md 18). Without a hook the button is not drawn. */
   onHelp?: () => void;
+  /** The pause button (DESIGN.md 0): pauses or resumes the round. Without a hook the button is not drawn. */
+  onPause?: () => void;
   /** The coach line's tap does the advised action through here (DESIGN.md 0: advice only, never automatic). */
   dispatch?: (action: Action) => void;
   /** The speaker button (DESIGN.md 19): bound to this; not drawn without it, hidden while !audio.available. */
@@ -160,6 +164,24 @@ export function createHud(hooks: HudHooks): Hud {
     ? h('button', { class: 'hud-btn help', type: 'button', title: 'How to play', attrs: { 'aria-label': 'How to play' }, onClick: () => hooks.onHelp?.() }, icon('question'))
     : null;
 
+  // DESIGN.md 0, Pause: the pause button; the countdown freezes and dims while paused
+  const pause = hooks.onPause
+    ? h('button', { class: 'hud-btn pause', type: 'button', attrs: { 'aria-label': 'Pause', 'aria-pressed': 'false', 'data-tour': 'pause' }, onClick: () => hooks.onPause?.() })
+    : null;
+  function setPaused(paused: boolean): void {
+    countdown.classList.toggle('paused', paused);
+    countdown.title = paused
+      ? 'Paused. Tap play to continue.'
+      : 'Time left in the round. When it hits zero the buzzer sells the company.';
+    if (!pause) return;
+    pause.replaceChildren(icon(paused ? 'play' : 'pause'));
+    pause.classList.toggle('on', paused);
+    pause.setAttribute('aria-pressed', paused ? 'true' : 'false');
+    pause.setAttribute('aria-label', paused ? 'Resume' : 'Pause');
+    pause.title = paused ? 'Resume the round (Space)' : 'Pause the round (Space)';
+  }
+  setPaused(false);
+
   // DESIGN.md 19: the speaker button, hidden when no AudioContext can be created
   const audio = hooks.audio;
   const speaker = audio
@@ -203,7 +225,7 @@ export function createHud(hooks: HudHooks): Hud {
   const el = h('div', { class: 'hud' },
     h('div', { class: 'pills', attrs: { 'data-tour': 'pills' } }, cash.el, profit.el, fcf.el, stake.el),
     capBar,
-    h('div', { class: 'hud-row' }, calendar, countdown, help, speaker),
+    h('div', { class: 'hud-row' }, calendar, countdown, pause, help, speaker),
     h('div', { class: 'lines' }, why, coach));
 
   function tone(target: HTMLElement, n: number): void {
@@ -272,5 +294,5 @@ export function createHud(hooks: HudHooks): Hud {
     }
   }
 
-  return { el, update, tickClock };
+  return { el, update, tickClock, setPaused };
 }

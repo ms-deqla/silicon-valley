@@ -1,8 +1,9 @@
 /**
  * The shell's handle on the simulation and on the round. Owns the GameState, the
- * fixed wall-clock → game-day conversion (DESIGN.md 0: one month per 20 s, no pause,
- * no speeds; game time is tied to the round clock, so a tab that was hidden catches up
- * when it returns), the ten-minute deadline and the buzzer, the leaderboard posts, the
+ * fixed wall-clock → game-day conversion (DESIGN.md 0: one month per 20 s, no speeds;
+ * game time is tied to the round clock, so a tab that was hidden catches up when it
+ * returns), the pause (both clocks stop together and nothing can be done until they
+ * resume), the ten-minute deadline and the buzzer, the leaderboard posts, the
  * audio cues, and the UI-only room highlight. The clock is held until startClock():
  * the first-start tour runs over the mounted round with the countdown frozen at 10:00
  * (DESIGN.md 0, Tutorial). Nothing in the UI mutates the sim except through dispatch()
@@ -25,7 +26,7 @@ export interface ShellController extends GameController {
   readonly companyName: string;
   readonly playerName: string;
   readonly leaderboard: Leaderboard;
-  /** Wall-clock ms left in the round, clamped at 0; the full round while the clock is held. The countdown never stops once started (DESIGN.md 0). */
+  /** Wall-clock ms left in the round, clamped at 0; the full round while the clock is held; frozen while paused (DESIGN.md 0). */
   readonly remainingMs: number;
   /** Wall-clock ms since the round started, capped at the round length; 0 while the clock is held. */
   readonly elapsedMs: number;
@@ -35,6 +36,12 @@ export interface ShellController extends GameController {
   readonly clockRunning: boolean;
   /** Starts the round clock: the deadline is roundMs from now. The tour runs before it (DESIGN.md 0). Idempotent. */
   startClock(): void;
+  /** DESIGN.md 0, Pause: the countdown and game time are both stopped; dispatch refuses until togglePause(). */
+  readonly paused: boolean;
+  /** Pauses or resumes the round. Nothing happens while the clock is held or once the round is over. */
+  togglePause(): void;
+  /** Fires after every pause and resume. */
+  onPause(listener: (paused: boolean) => void): () => void;
   /** DESIGN.md 0, Practice: the same round, nothing posted to the board. */
   readonly practice: boolean;
   /** Wall-clock ms spent with a card open, for the post-mortem (DESIGN.md 20: "Cards waited N s"). */
@@ -121,6 +128,10 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
   const roundMs = RULES.roundSeconds * 1000;
   /** the clock is held until startClock(): the tour runs over the frozen 10:00 (DESIGN.md 0) */
   let running = false;
+  /** DESIGN.md 0, Pause: when true, the deadline is frozen at pausedAt and tick() does nothing. */
+  let paused = false;
+  let pausedAt = 0;
+  const pauseListeners = new Set<Listener<boolean>>();
   let startedAt = 0;
   let deadline = 0;
   /** wall-clock ms of game time still to be simulated: the round clock's backlog */
@@ -243,7 +254,7 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
    * share one clock and cannot drift apart. Nothing moves while the clock is held.
    */
   function tick(_dtMs: number): boolean {
-    if (!running) return false;
+    if (!running || paused) return false;
     if (state.status !== 'playing') {
       backlog = 0;
       return false;
@@ -283,6 +294,11 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
   }
 
   function dispatch(action: Action): Verdict {
+    if (paused) {
+      // DESIGN.md 0, Pause: a paused round is read-only; the pause button is the way back in
+      emitToast('Paused. Tap play to continue.', 'info');
+      return { ok: false, reason: 'Paused.' };
+    }
     const v = simDispatch(state, action);
     if (!v.ok) {
       emitToast(v.reason ?? 'Not possible right now.', 'bad');
@@ -302,6 +318,28 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
     backlog = 0;
   }
 
+  /**
+   * DESIGN.md 0, Pause: the countdown and game time stop together. On resume the deadline
+   * (and the start, so elapsedMs holds) move forward by the time spent paused, and the
+   * clock is re-read from now, so no backlog accrues and no month is lost or gained.
+   */
+  function togglePause(): void {
+    if (!running || state.status !== 'playing') return;
+    const now = Date.now();
+    if (!paused) {
+      paused = true;
+      pausedAt = now;
+    } else {
+      const shift = Math.max(0, now - pausedAt);
+      deadline += shift;
+      startedAt += shift;
+      clockedAt = now;
+      paused = false;
+    }
+    audio.play('click');
+    for (const l of pauseListeners) l(paused);
+  }
+
   function newGame(newSeed: number): void {
     state = createGame(newSeed, { companyName: name });
     backlog = 0;
@@ -311,6 +349,7 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
     postedStatus = null;
     cuedCardId = null;
     running = false;
+    paused = false;
     startClock();
     notify();
   }
@@ -323,7 +362,7 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
       return FIXED_SPEED;
     },
     set speed(_s: Speed) {
-      // DESIGN.md 0: no pause, no speed buttons
+      // DESIGN.md 0: no speed buttons; the pause is togglePause(), not a speed
     },
     get dayProgress() {
       return Math.max(0, Math.min(0.999, backlog / DAY_MS));
@@ -348,10 +387,10 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
       return leaderboard;
     },
     get remainingMs() {
-      return running ? Math.max(0, deadline - Date.now()) : roundMs;
+      return running ? Math.max(0, deadline - (paused ? pausedAt : Date.now())) : roundMs;
     },
     get elapsedMs() {
-      return running ? Math.min(roundMs, Math.max(0, Date.now() - startedAt)) : 0;
+      return running ? Math.min(roundMs, Math.max(0, (paused ? pausedAt : Date.now()) - startedAt)) : 0;
     },
     get roundMs() {
       return roundMs;
@@ -360,6 +399,16 @@ export function createController(seed: number, leaderboard: Leaderboard, opts: C
       return running;
     },
     startClock,
+    get paused() {
+      return paused;
+    },
+    togglePause,
+    onPause(listener) {
+      pauseListeners.add(listener);
+      return () => {
+        pauseListeners.delete(listener);
+      };
+    },
     get practice() {
       return practice;
     },

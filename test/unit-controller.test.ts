@@ -158,3 +158,84 @@ describe('the round clock projects the day the buzzer rings (DESIGN.md 0)', () =
     expect(full.state.schedule.knocks).toBe(1);
   });
 });
+
+describe('the pause stops the countdown and game time together (DESIGN.md 0, Pause)', () => {
+  beforeEach(() => {
+    useTournamentRules();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-06T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('freezes the clock, refuses actions, and resumes with no month lost or gained', () => {
+    const c = running(3);
+    quiet(c.state);
+    const roundMs = c.roundMs;
+    vi.advanceTimersByTime(MONTH_MS);
+    expect(c.tick(0)).toBe(true);
+    expect(c.state.day).toBe(D);
+    expect(c.paused).toBe(false);
+
+    c.togglePause();
+    expect(c.paused).toBe(true);
+    const frozen = c.remainingMs;
+    expect(frozen).toBe(roundMs - MONTH_MS);
+    vi.advanceTimersByTime(5 * MONTH_MS);
+    expect(c.tick(0)).toBe(false);
+    expect(c.state.day).toBe(D);
+    expect(c.remainingMs).toBe(frozen);
+    expect(c.elapsedMs).toBe(MONTH_MS);
+    // a paused round is read-only
+    const hire = c.dispatch({ type: 'hireRole', role: 'product' });
+    expect(hire.ok).toBe(false);
+    expect(hire.reason).toBe('Paused.');
+    expect(c.state.people.length).toBe(1);
+
+    c.togglePause();
+    expect(c.paused).toBe(false);
+    expect(c.remainingMs).toBe(frozen);
+    expect(c.tick(0)).toBe(false);
+    expect(c.state.day).toBe(D);
+    vi.advanceTimersByTime(MONTH_MS);
+    expect(c.tick(0)).toBe(true);
+    expect(c.state.day).toBe(2 * D);
+    expect(c.remainingMs).toBe(roundMs - 2 * MONTH_MS);
+    expect(c.elapsedMs).toBe(2 * MONTH_MS);
+  });
+
+  it('pushes the projected buzzer day along with the deadline', () => {
+    const c = running(3);
+    quiet(c.state);
+    c.tick(0);
+    expect(c.state.schedule.roundEndDay).toBe(ROUND_DAYS);
+    c.togglePause();
+    vi.advanceTimersByTime(3 * MONTH_MS);
+    c.togglePause();
+    c.tick(0);
+    expect(c.state.schedule.roundEndDay).toBe(ROUND_DAYS);
+  });
+
+  it('does nothing while the clock is held or once the round is over, and notifies its listeners', () => {
+    const held = createController(3, stubLeaderboard(), { audio: silent });
+    held.togglePause();
+    expect(held.paused).toBe(false);
+    expect(held.remainingMs).toBe(held.roundMs);
+
+    const c = running(3);
+    quiet(c.state);
+    const seen: boolean[] = [];
+    const off = c.onPause((p) => seen.push(p));
+    c.togglePause();
+    c.togglePause();
+    expect(seen).toEqual([true, false]);
+    off();
+    vi.advanceTimersByTime(c.roundMs + MONTH_MS);
+    for (let i = 0; i < 40 && c.state.status === 'playing'; i++) c.tick(0);
+    expect(c.state.status).not.toBe('playing');
+    c.togglePause();
+    expect(c.paused).toBe(false);
+    expect(seen).toEqual([true, false]);
+  });
+});

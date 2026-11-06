@@ -11,7 +11,7 @@ export type IconName =
   | 'personPlus' | 'personMinus'
   | 'wrench' | 'handshake' | 'headset' | 'megaphone' | 'briefcase' | 'flask'
   | 'server' | 'screen' | 'coin' | 'calendar' | 'gear'
-  | 'speakerOn' | 'speakerOff' | 'question' | 'play' | 'copy' | 'trophy' | 'flag';
+  | 'speakerOn' | 'speakerOff' | 'question' | 'play' | 'pause' | 'copy' | 'trophy' | 'flag';
 
 /** Path data per icon: each entry becomes one <path d>; a short "h.01" is a round-capped dot. */
 const PATHS: Record<IconName, string[]> = {
@@ -76,6 +76,7 @@ const PATHS: Record<IconName, string[]> = {
   speakerOff: ['M11 5L6 9H2.5v6H6l5 4V5z', 'M22 9l-6 6', 'M16 9l6 6'],
   question: ['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z', 'M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3', 'M12 17h.01'],
   play: ['M6.5 4.5v15a.5.5 0 0 0 .77.42l12-7.5a.5.5 0 0 0 0-.84l-12-7.5a.5.5 0 0 0-.77.42z'],
+  pause: ['M7 4.5h3v15H7z', 'M14 4.5h3v15h-3z'],
   copy: ['M10.5 9.5h10A1.5 1.5 0 0 1 22 11v10a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 9 21V11a1.5 1.5 0 0 1 1.5-1.5z', 'M5 15H3.5A1.5 1.5 0 0 1 2 13.5v-10A1.5 1.5 0 0 1 3.5 2h10A1.5 1.5 0 0 1 15 3.5V5'],
   trophy: ['M6.5 3.5h11V9a5.5 5.5 0 0 1-11 0z', 'M6.5 5.5H4a1.75 1.75 0 0 0 0 3.5h2.5', 'M17.5 5.5H20a1.75 1.75 0 0 1 0 3.5h-2.5', 'M12 14.5v4', 'M8 20.5h8'],
   flag: ['M4.5 21.5V3.5', 'M4.5 4.5c2-1.3 4-1.3 6 0s4 1.3 6 0 3-1 3-1v9s-1 .7-3 1-4-1.3-6-2.6-4-1.3-6 0'],
@@ -87,7 +88,7 @@ const LABEL: Record<IconName, string> = {
   personPlus: 'Hire', personMinus: 'Let go',
   wrench: 'Product', handshake: 'Sales', headset: 'Support', megaphone: 'Marketing', briefcase: 'Finance', flask: 'R&D',
   server: 'Server', screen: 'Demo room', coin: 'Coin', calendar: 'Calendar', gear: 'Settings',
-  speakerOn: 'Sound on', speakerOff: 'Sound off', question: 'Help', play: 'Play', copy: 'Copy', trophy: 'Coach', flag: 'Finish',
+  speakerOn: 'Sound on', speakerOff: 'Sound off', question: 'Help', play: 'Play', pause: 'Pause', copy: 'Copy', trophy: 'Coach', flag: 'Finish',
 };
 
 export interface IconOptions {

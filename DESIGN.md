@@ -18,8 +18,11 @@ stay in the code and the tests but never reach the screen. Decided with the owne
 
 - **The round.** A 10:00 wall-clock countdown that never stops. Game time runs at a
   fixed one month per 20 seconds (30 game months in a round, two and a half years).
-  No pause, no speed buttons. Investor and event cards stop the game clock, not the
-  countdown: a slow decision costs game months. Leaving the tab costs attention, not
+  No speed buttons. A pause button on the HUD (also Space) stops the countdown and game
+  time together; nothing can be done while paused, and the deadline moves forward by the
+  time spent paused. Investor and event cards stop the game clock, not the countdown: a
+  slow decision costs game months (unless the player pauses first, which is allowed and
+  not marked: the board trusts the room). Added 2026-11-06 for live presentations. Leaving the tab costs attention, not
   months: the game catches up to the wall clock when you return (see Clock details).
 - **Same world for everyone.** One seed per day (YYYYMMDD) for all players.
 - **Score** = company value × the founder's remaining share, taken when the countdown

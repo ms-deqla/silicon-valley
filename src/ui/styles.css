@@ -248,7 +248,7 @@ small { font-size: 11px; }
 .cal-body { display: flex; align-items: baseline; gap: 6px; padding: 1px 10px 2px; white-space: nowrap; }
 .cal-month { font-size: 14px; }
 .cal-day { font-size: 11px; color: var(--ink-2); }
-/* DESIGN.md 0, 17: the countdown never stops; a dark pill, amber under 2:00, red under 0:30 */
+/* DESIGN.md 0, 17: the countdown; a dark pill, amber under 2:00, red under 0:30, dimmed and still while paused */
 .countdown {
   flex: none;
   min-width: 102px;
@@ -266,6 +266,7 @@ small { font-size: 11px; }
 }
 .countdown.warn { background: var(--amber); }
 .countdown.danger { background: var(--bad); animation: tick 1s steps(2, jump-none) infinite; }
+.countdown.paused { background: var(--ink-3); animation: none; }
 .hud-btn {
   flex: none;
   width: 44px;
@@ -283,6 +284,7 @@ small { font-size: 11px; }
 .hud-btn .icon { width: 22px; height: 22px; }
 .hud-btn:active { transform: scale(0.96); }
 .hud-btn.help { color: var(--blue); }
+.hud-btn.pause.on { color: #fff; background: var(--blue); border-color: var(--blue); }
 .hud-btn.speaker.off { color: var(--ink-3); }
 
 /* DESIGN.md 13: the why line is a whole sentence, so it wraps to two rows instead of clipping;

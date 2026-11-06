@@ -224,11 +224,11 @@ export function mountStart(root: HTMLElement, leaderboard: Leaderboard, onStart:
   const room = CONFIG.rooms.size[RULES.roomSize];
   const cat = CONFIG.assets.catalogue;
   const rules = h('ul', { class: 'start-rules' },
-    h('li', { text: `${minutes}:00 on the clock; one game month every ${RULES.secondsPerMonth} seconds. No pause: a card you leave open costs game months, not minutes.` }),
+    h('li', { text: `${minutes}:00 on the clock; one game month every ${RULES.secondsPerMonth} seconds. The pause button stops everything; a card you leave open (unpaused) costs game months, not minutes.` }),
     h('li', { text: `You start in a garage with ${money(CONFIG.start.cash)}. Hire and fire in ${RULES.roles.length} departments; a desk, a laptop and a room of ${room.maxDesks} desks (${money(room.rent)}/mo) come with the hire, an emptied room closes by itself, and a full ground floor builds the second floor for ${money(cat.secondFloor.price)}.` }),
     h('li', { text: `Buy servers (${money(cat.server.price)}) and a demo room (${money(cat.demoRoom.price)}). Take or decline investors. Answer what happens.` }),
     h('li', { text: 'Score = company value × the share you still own when the buzzer goes. Out of cash scores 0.' }),
-    h('li', { text: 'The clock never stops. If you leave the tab, the game catches up when you return; a card left open keeps the game paused while the clock runs.' }));
+    h('li', { text: 'The clock runs on its own. If you leave the tab, the game catches up when you return; a card left open keeps the game waiting while the clock runs. Pause (Space) stops both.' }));
 
   // DESIGN.md 19: the speaker button, hidden when there is no AudioContext
   const audio = extras.audio;

@@ -117,11 +117,14 @@ function mountGame(opts: StartOptions): Mounted {
     onValue: () => sheets.toggle(booksSheet(controller), BOOKS_VALUATION_TAB),
     // DESIGN.md 0, 18, 19: the "?" opens the Playbook, the coach line's tap dispatches, the speaker binds the page's audio
     onHelp: () => toggleHelp(),
+    onPause: () => controller.togglePause(),
     dispatch: (action) => controller.dispatch(action),
     audio,
     playerColor: COLOR_HEX[opts.color],
   });
   hud.el.setAttribute('data-tour', 'hud');
+  // DESIGN.md 0, Pause: the HUD follows the controller's pause state
+  const offPause = controller.onPause((paused) => hud.setPaused(paused));
   const strip = createLeaderStrip(leaderboard);
   const board = createBoard(controller);
   board.el.setAttribute('data-tour', 'board');
@@ -178,7 +181,7 @@ function mountGame(opts: StartOptions): Mounted {
   refresh(controller.state);
   cardLayer.addEventListener('click', () => setTimeout(syncWaiting, 0));
 
-  // ---- keyboard: Escape closes the Books (the Playbook and the tour handle their own Escape); "?" opens the Playbook
+  // ---- keyboard: Escape closes the Books (the Playbook and the tour handle their own Escape); "?" opens the Playbook; Space pauses
   const onKey = (ev: KeyboardEvent): void => {
     const t = ev.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
@@ -187,6 +190,11 @@ function mountGame(opts: StartOptions): Mounted {
       return;
     }
     if (ev.key === '?' && !tour && controller.state.status === 'playing') toggleHelp();
+    // Space pauses wherever focus is (preventDefault also stops a focused button from firing on the key-up)
+    if (ev.key === ' ' && !tour && controller.state.status === 'playing') {
+      ev.preventDefault();
+      controller.togglePause();
+    }
   };
   window.addEventListener('keydown', onKey);
 
@@ -240,6 +248,7 @@ function mountGame(opts: StartOptions): Mounted {
       window.removeEventListener('keydown', onKey);
       offToast();
       offState();
+      offPause();
       strip.destroy();
       result.destroy();
       renderer.destroy();
